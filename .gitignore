@@ -34,3 +34,9 @@ napcat/
 .env
 *.pem
 *.key
+
+# Runtime data
+sessions.json
+
+# Personal content
+novels/
