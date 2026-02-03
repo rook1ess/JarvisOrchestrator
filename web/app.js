@@ -11,8 +11,6 @@
     // Configuration
     // ============================================
     let currentAgent = 'default';
-    const STORAGE_KEY = 'jarvis_chat_history';
-    const SESSION_KEY = 'jarvis_server_session_id';
 
     // 从 URL 参数获取 instance，默认 ws-default
     function getCurrentInstance() {
@@ -20,6 +18,14 @@
         return params.get('instance') || 'ws-default';
     }
     let currentInstance = getCurrentInstance();
+
+    // 按实例分离存储 key
+    function getStorageKey() {
+        return `jarvis_chat_history_${currentInstance}`;
+    }
+    function getSessionKey() {
+        return `jarvis_session_${currentInstance}`;
+    }
 
     // Typewriter effect settings
     const TYPEWRITER_CONFIG = {
@@ -45,7 +51,7 @@
     }
 
     // ============================================
-    // LocalStorage Functions
+    // LocalStorage Functions (按实例分离)
     // ============================================
     function saveMessagesToStorage() {
         try {
@@ -54,7 +60,7 @@
                 agent: currentAgent,
                 timestamp: Date.now()
             };
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+            localStorage.setItem(getStorageKey(), JSON.stringify(data));
         } catch (e) {
             console.warn('Failed to save messages to localStorage:', e);
         }
@@ -62,7 +68,7 @@
 
     function loadMessagesFromStorage() {
         try {
-            const data = localStorage.getItem(STORAGE_KEY);
+            const data = localStorage.getItem(getStorageKey());
             if (data) {
                 return JSON.parse(data);
             }
@@ -73,12 +79,12 @@
     }
 
     function clearStorage() {
-        localStorage.removeItem(STORAGE_KEY);
-        localStorage.removeItem(SESSION_KEY);
+        localStorage.removeItem(getStorageKey());
+        localStorage.removeItem(getSessionKey());
     }
 
     function checkServerSession(serverSessionId) {
-        const storedSessionId = localStorage.getItem(SESSION_KEY);
+        const storedSessionId = localStorage.getItem(getSessionKey());
         if (storedSessionId && storedSessionId !== serverSessionId) {
             // 服务器重启了，清空历史
             console.log('Server restarted, clearing chat history');
@@ -86,7 +92,7 @@
             return true; // 表示需要清空
         }
         // 保存新的 session id
-        localStorage.setItem(SESSION_KEY, serverSessionId);
+        localStorage.setItem(getSessionKey(), serverSessionId);
         return false;
     }
 
@@ -2235,14 +2241,14 @@
                 setStatus('ready', 'Ready');
                 // 检查服务器是否重启，如果重启了则清空历史并重新加载页面
                 if (data.server_session_id) {
-                    const storedSessionId = localStorage.getItem(SESSION_KEY);
+                    const storedSessionId = localStorage.getItem(getSessionKey());
                     if (storedSessionId && storedSessionId !== data.server_session_id) {
                         // 服务器重启了，清空存储
                         console.log('Server restarted, clearing storage');
                         clearStorage();
                     }
                     // 保存当前 session_id
-                    localStorage.setItem(SESSION_KEY, data.server_session_id);
+                    localStorage.setItem(getSessionKey(), data.server_session_id);
                 }
                 break;
 
@@ -2550,7 +2556,7 @@
         state.fullContent = '';
 
         // 清空 localStorage（但保留 session_id，只清消息）
-        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(getStorageKey());
 
         // Reconnect
         setTimeout(connectWebSocket, 100);

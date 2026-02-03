@@ -8,19 +8,43 @@ from typing import Optional, List
 
 from claude_agent_sdk import AgentDefinition
 
-# 服务启动时生成唯一 ID，用于前端判断是否需要清空历史
-SERVER_SESSION_ID = str(uuid.uuid4())
+# ============== 路径配置（提前定义，供后续使用）==============
+PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+DATA_DIR = PROJECT_ROOT / "data"
+
+# ============== 持久化 SERVER_SESSION_ID ==============
+def _get_or_create_server_session_id() -> str:
+    """获取或创建服务器 session ID，持久化到文件避免 reload 时变化"""
+    DATA_DIR.mkdir(exist_ok=True)
+    session_file = DATA_DIR / ".server_session_id"
+
+    if session_file.exists():
+        try:
+            stored_id = session_file.read_text().strip()
+            if stored_id:
+                return stored_id
+        except Exception:
+            pass
+
+    # 创建新的
+    new_id = str(uuid.uuid4())
+    try:
+        session_file.write_text(new_id)
+        print(f"[Config] 创建新的 SERVER_SESSION_ID: {new_id[:8]}...")
+    except Exception as e:
+        print(f"[Config] 无法保存 SERVER_SESSION_ID: {e}")
+    return new_id
+
+SERVER_SESSION_ID = _get_or_create_server_session_id()
 
 # ============== 服务配置 ==============
 SERVER_HOST = os.getenv("JARVIS_HOST", "0.0.0.0")
 SERVER_PORT = int(os.getenv("JARVIS_PORT", "6790"))
 
-# ============== 路径配置 ==============
-PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+# ============== 其他路径配置 ==============
 INSTANCES_DIR = PROJECT_ROOT / "instances"
 SUBAGENTS_DIR = PROJECT_ROOT / ".claude" / "agents"
 WEB_DIR = PROJECT_ROOT / "web"
-DATA_DIR = PROJECT_ROOT / "data"
 
 # ============== QQ (NapCat OneBot11) 配置 ==============
 NAPCAT_API_URL = os.getenv("NAPCAT_API_URL", "http://localhost:3000")

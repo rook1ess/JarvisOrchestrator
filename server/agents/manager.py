@@ -1,9 +1,16 @@
 """AgentManager：管理多个 AgentInstance 生命周期 + 健康检查"""
 
 import asyncio
+import json
 import time
+from pathlib import Path
 from typing import Optional, Dict
 from server.agents.instance import AgentInstance
+from server.config import DATA_DIR
+
+
+# 持久化文件路径
+INSTANCE_SESSIONS_FILE = DATA_DIR / "instance_sessions.json"
 
 
 class AgentManager:
@@ -14,9 +21,41 @@ class AgentManager:
         self._health_task: Optional[asyncio.Task] = None
         # instance_id -> {"last_session_id": str} 记录运行时状态，用于自愈和空闲恢复
         self._instance_configs: Dict[str, dict] = {}
+        # 启动时从文件加载
+        self._load_instance_sessions()
 
     def set_task_manager(self, tm):
         self._task_manager = tm
+
+    def _load_instance_sessions(self):
+        """从文件加载 instance_id -> session_id 映射"""
+        if INSTANCE_SESSIONS_FILE.exists():
+            try:
+                with open(INSTANCE_SESSIONS_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                for iid, session_id in data.items():
+                    self._instance_configs[iid] = {"last_session_id": session_id}
+                print(f"[Manager] 加载 {len(data)} 个实例 session 映射")
+            except Exception as e:
+                print(f"[Manager] 加载 instance_sessions.json 失败: {e}")
+
+    def _save_instance_sessions(self):
+        """保存 instance_id -> session_id 映射到文件"""
+        data = {}
+        for iid, config in self._instance_configs.items():
+            if config.get("last_session_id"):
+                data[iid] = config["last_session_id"]
+        # 也保存当前运行实例的 session
+        for iid, inst in self._instances.items():
+            if inst.current_session_id:
+                data[iid] = inst.current_session_id
+
+        try:
+            DATA_DIR.mkdir(exist_ok=True)
+            with open(INSTANCE_SESSIONS_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"[Manager] 保存 instance_sessions.json 失败: {e}")
 
     async def create_instance(self, instance_id: str,
                                resume_session: str = None) -> AgentInstance:
@@ -44,10 +83,17 @@ class AgentManager:
 
     async def stop_all(self):
         async with self._lock:
+            # 先保存所有运行中实例的 session
+            for iid, inst in self._instances.items():
+                if inst.current_session_id:
+                    self._instance_configs.setdefault(iid, {})
+                    self._instance_configs[iid]["last_session_id"] = inst.current_session_id
+            self._save_instance_sessions()  # 持久化到文件
+
             for instance in self._instances.values():
                 await instance.stop()
             self._instances.clear()
-            self._instance_configs.clear()
+            # 注意：不清除 _instance_configs，保留 session 映射供下次启动
 
     def get_instance(self, instance_id: str) -> Optional[AgentInstance]:
         return self._instances.get(instance_id)
@@ -107,6 +153,7 @@ class AgentManager:
         if old and old.current_session_id:
             config["last_session_id"] = old.current_session_id
             self._instance_configs[instance_id] = config
+            self._save_instance_sessions()  # 持久化到文件
 
         if old:
             try:
@@ -176,6 +223,7 @@ class AgentManager:
                                         self._instance_configs.setdefault(iid, {})
                                         self._instance_configs[iid]["last_session_id"] = removed.current_session_id
                                         print(f"[Health] 保存 session: {iid} -> {removed.current_session_id[:8]}...")
+                                        self._save_instance_sessions()  # 持久化到文件
                                     await removed.stop()
 
         self._health_task = asyncio.create_task(loop())
