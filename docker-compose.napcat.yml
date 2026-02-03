@@ -1,0 +1,14 @@
+services:
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    container_name: napcat
+    restart: unless-stopped
+    ports:
+      - "3000:3000"   # OneBot11 HTTP API（供 server.py 调用发消息）
+      - "6099:6099"   # NapCat WebUI（扫码登录管理）
+    volumes:
+      - ./napcat/config:/app/napcat/config   # OneBot11 配置
+      - ./napcat/data:/app/.config/QQ        # QQ 数据持久化
+    environment:
+      - NAPCAT_GID=0
+      - NAPCAT_UID=0

@@ -1,0 +1,8 @@
+{
+  "routes": [
+    {"channel": "websocket", "instance_id": "ws-default"},
+    {"channel": "qq", "match": {"message_type": "private"}, "instance_id": "qq-default"},
+    {"channel": "qq", "match": {"message_type": "group"}, "instance_id": "qq-default"}
+  ],
+  "idle_timeout_minutes": 60
+}

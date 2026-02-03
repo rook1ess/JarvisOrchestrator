@@ -1,0 +1,91 @@
+"""消息路由：channel → agent instance（按需创建）"""
+
+import json
+from pathlib import Path
+from typing import Optional
+from server.agents.manager import AgentManager
+from server.channels.base import Channel
+from server.config import PROJECT_ROOT
+
+
+class MessageRouter:
+    """根据 routing.json 配置将消息路由到正确的 AgentInstance，按需创建"""
+
+    def __init__(self, agent_manager: AgentManager):
+        self.agent_manager = agent_manager
+        self.routes: list = []
+        self.idle_timeout_minutes: int = 60
+
+    def load_config(self, config_path: Path = None):
+        if config_path is None:
+            config_path = PROJECT_ROOT / "routing.json"
+        if not config_path.exists():
+            print("[Router] routing.json 不存在，使用默认配置")
+            self.routes = [{"channel": "websocket", "instance_id": "ws-default"}]
+            return
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+            self.routes = config.get("routes", [])
+            self.idle_timeout_minutes = config.get("idle_timeout_minutes", 60)
+            print(f"[Router] 加载 {len(self.routes)} 条路由规则 (空闲超时: {self.idle_timeout_minutes}min)")
+        except Exception as e:
+            print(f"[Router] 加载路由配置失败: {e}")
+            self.routes = [{"channel": "websocket", "instance_id": "ws-default"}]
+
+    def resolve(self, channel_type: str, context: dict = None) -> Optional[dict]:
+        """根据 channel + context 匹配路由，返回完整路由条目（含 instance_id + agent）"""
+        context = context or {}
+        for route in self.routes:
+            if route.get("channel") != channel_type:
+                continue
+            match = route.get("match")
+            if match:
+                if not all(context.get(k) == v for k, v in match.items()):
+                    continue
+            return route
+        # fallback: 第一个匹配 channel 的路由
+        for route in self.routes:
+            if route.get("channel") == channel_type:
+                return route
+        return None
+
+    async def _ensure_instance(self, route: dict):
+        """确保实例存在，不存在则按需创建（有历史 session 则 resume）"""
+        instance_id = route.get("instance_id")
+        instance = self.agent_manager.get_instance(instance_id)
+        if instance is not None:
+            return instance
+
+        # 检查是否有上次回收时保存的 session_id
+        saved_config = self.agent_manager._instance_configs.get(instance_id, {})
+        last_session_id = saved_config.get("last_session_id")
+
+        if last_session_id:
+            print(f"[Router] 按需恢复实例: {instance_id} (resume: {last_session_id[:8]}...)")
+        else:
+            print(f"[Router] 按需创建实例: {instance_id} (新 session)")
+
+        return await self.agent_manager.create_instance(instance_id, resume_session=last_session_id)
+
+    async def route_message(self, channel: Channel, channel_type: str,
+                             message: str, context: dict = None,
+                             attachments: list = None):
+        """路由消息到正确的 AgentInstance（不存在则自动创建）"""
+        route = self.resolve(channel_type, context)
+        if not route:
+            print(f"[Router] 无法路由: channel={channel_type}, context={context}")
+            return
+
+        instance = await self._ensure_instance(route)
+        if not instance:
+            print(f"[Router] 创建实例失败: {route.get('instance_id')}")
+            return
+
+        source = context.get("source", "user") if context else "user"
+        await instance.enqueue(
+            message=message,
+            source=source,
+            attachments=attachments,
+            response_callback=channel.send_response,
+        )

@@ -1,0 +1,205 @@
+"""配置加载、常量、工具列表"""
+
+import json
+import os
+import uuid
+from pathlib import Path
+from typing import Optional, List
+
+from claude_agent_sdk import AgentDefinition
+
+# 服务启动时生成唯一 ID，用于前端判断是否需要清空历史
+SERVER_SESSION_ID = str(uuid.uuid4())
+
+# ============== 服务配置 ==============
+SERVER_HOST = os.getenv("JARVIS_HOST", "0.0.0.0")
+SERVER_PORT = int(os.getenv("JARVIS_PORT", "6790"))
+
+# ============== 路径配置 ==============
+PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+INSTANCES_DIR = PROJECT_ROOT / "instances"
+SUBAGENTS_DIR = PROJECT_ROOT / ".claude" / "agents"
+WEB_DIR = PROJECT_ROOT / "web"
+DATA_DIR = PROJECT_ROOT / "data"
+
+# ============== QQ (NapCat OneBot11) 配置 ==============
+NAPCAT_API_URL = os.getenv("NAPCAT_API_URL", "http://localhost:3000")
+NAPCAT_TOKEN = os.getenv("NAPCAT_TOKEN", "")
+QQ_ALLOWED_USERS = [int(x) for x in os.getenv("QQ_ALLOWED_USERS", "").split(",") if x.strip()]
+QQ_ALLOWED_GROUPS = [int(x) for x in os.getenv("QQ_ALLOWED_GROUPS", "").split(",") if x.strip()]
+QQ_GROUP_AT_ONLY = os.getenv("QQ_GROUP_AT_ONLY", "true").lower() == "true"
+
+# ============== 可用工具列表 ==============
+AVAILABLE_TOOLS = [
+    {"id": "Read", "name": "Read", "description": "读取文件内容"},
+    {"id": "Write", "name": "Write", "description": "创建新文件"},
+    {"id": "Edit", "name": "Edit", "description": "修改现有文件"},
+    {"id": "MultiEdit", "name": "MultiEdit", "description": "批量编辑多个文件"},
+    {"id": "Glob", "name": "Glob", "description": "匹配文件路径"},
+    {"id": "Grep", "name": "Grep", "description": "搜索文件内容"},
+    {"id": "LS", "name": "LS", "description": "列出目录内容"},
+    {"id": "Bash", "name": "Bash", "description": "执行 shell 命令"},
+    {"id": "BashOutput", "name": "BashOutput", "description": "检查后台进程输出"},
+    {"id": "KillShell", "name": "KillShell", "description": "终止后台进程"},
+    {"id": "Task", "name": "Task", "description": "调用子代理执行任务"},
+    {"id": "TodoRead", "name": "TodoRead", "description": "读取 todo 列表"},
+    {"id": "TodoWrite", "name": "TodoWrite", "description": "写入 todo 列表"},
+    {"id": "NotebookRead", "name": "NotebookRead", "description": "读取 Jupyter Notebook 单元格"},
+    {"id": "NotebookEdit", "name": "NotebookEdit", "description": "编辑 Jupyter Notebook 单元格"},
+    {"id": "WebSearch", "name": "WebSearch", "description": "搜索网页"},
+    {"id": "WebFetch", "name": "WebFetch", "description": "获取网页内容"},
+    {"id": "Skill", "name": "Skill", "description": "执行自定义技能"},
+]
+
+
+# ============== Claude Session 路径 ==============
+
+def get_claude_sessions_dir() -> Path:
+    escaped_path = str(PROJECT_ROOT).replace("/", "-")
+    return Path.home() / ".claude" / "projects" / escaped_path
+
+
+def get_claude_sessions_index() -> Path:
+    return get_claude_sessions_dir() / "sessions-index.json"
+
+
+# ============== Instance 配置加载 ==============
+
+def load_instance_config(instance_id: str) -> dict:
+    """加载实例配置：先读 _default.json，再用 {instance_id}.json 覆盖"""
+    config = {}
+
+    # 1. 加载默认配置
+    default_file = INSTANCES_DIR / "_default.json"
+    if default_file.exists():
+        try:
+            with open(default_file, "r", encoding="utf-8") as f:
+                config = json.load(f)
+        except Exception as e:
+            print(f"[Config] Failed to load _default.json: {e}")
+
+    # 2. 加载实例特定配置并覆盖
+    instance_file = INSTANCES_DIR / f"{instance_id}.json"
+    if instance_file.exists():
+        try:
+            with open(instance_file, "r", encoding="utf-8") as f:
+                instance_config = json.load(f)
+                for key, value in instance_config.items():
+                    if not key.startswith("_"):  # 忽略 _comment 等
+                        config[key] = value
+        except Exception as e:
+            print(f"[Config] Failed to load {instance_id}.json: {e}")
+
+    # 3. 如果指定了 system_prompt_file，从文件加载
+    if config.get("system_prompt_file"):
+        prompt_path = PROJECT_ROOT / config["system_prompt_file"]
+        if prompt_path.exists():
+            try:
+                config["system_prompt"] = prompt_path.read_text(encoding="utf-8")
+            except Exception as e:
+                print(f"[Config] Failed to load prompt file: {e}")
+
+    return config
+
+
+def load_subagents() -> list:
+    subagents = []
+    if SUBAGENTS_DIR.exists():
+        for file in SUBAGENTS_DIR.glob("*.md"):
+            try:
+                content = file.read_text(encoding="utf-8")
+                if content.startswith("---"):
+                    end = content.find("---", 3)
+                    if end != -1:
+                        frontmatter = content[3:end].strip()
+                        name = file.stem
+                        description = ""
+                        tools = []
+                        model = "sonnet"
+                        for line in frontmatter.split("\n"):
+                            if line.startswith("name:"):
+                                name = line.split(":", 1)[1].strip()
+                            elif line.startswith("description:"):
+                                description = line.split(":", 1)[1].strip()
+                            elif line.startswith("tools:"):
+                                tools = [t.strip() for t in line.split(":", 1)[1].split(",")]
+                            elif line.startswith("model:"):
+                                model = line.split(":", 1)[1].strip()
+                        subagents.append({
+                            "id": file.stem,
+                            "name": name,
+                            "description": description,
+                            "tools": tools,
+                            "model": model,
+                            "file": str(file)
+                        })
+            except Exception as e:
+                print(f"[Error] Failed to load subagent {file}: {e}")
+    return subagents
+
+
+def build_subagents_dict(subagent_ids: List[str]) -> dict:
+    subagents = {}
+    all_subagents = load_subagents()
+    subagent_map = {s["id"]: s for s in all_subagents}
+    for sid in subagent_ids:
+        if sid in subagent_map:
+            info = subagent_map[sid]
+            try:
+                prompt = Path(info["file"]).read_text(encoding="utf-8")
+                subagents[sid] = AgentDefinition(
+                    description=info["description"],
+                    prompt=prompt,
+                    tools=info["tools"],
+                    model=info["model"]
+                )
+            except Exception as e:
+                print(f"[Error] Failed to load subagent {sid}: {e}")
+    return subagents
+
+
+def get_mcp_servers_from_config(mcp_config_path: Optional[str]) -> list:
+    if not mcp_config_path:
+        return []
+    config_file = PROJECT_ROOT / mcp_config_path
+    if not config_file.exists():
+        return []
+    try:
+        with open(config_file, "r", encoding="utf-8") as f:
+            config = json.load(f)
+            servers = config.get("mcpServers", {})
+            return [{"id": name, "name": name, "url": info.get("url", "")}
+                    for name, info in servers.items()]
+    except Exception:
+        return []
+
+
+def load_claude_sessions() -> list:
+    index_file = get_claude_sessions_index()
+    sessions_dir = get_claude_sessions_dir()
+    if not index_file.exists():
+        return []
+    try:
+        with open(index_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            entries = data.get("entries", [])
+            valid_entries = []
+            for entry in entries:
+                session_id = entry.get("sessionId", "")
+                jsonl_file = sessions_dir / f"{session_id}.jsonl"
+                if jsonl_file.exists():
+                    valid_entries.append(entry)
+            valid_entries.sort(key=lambda x: x.get("modified", ""), reverse=True)
+            return valid_entries
+    except Exception as e:
+        print(f"[Error] Failed to load Claude sessions: {e}")
+        return []
+
+
+def get_session_title(session: dict) -> str:
+    first_prompt = session.get("firstPrompt", "New Chat")
+    if "<system-status" in first_prompt:
+        import re
+        first_prompt = re.sub(r'<system-status[^>]*>.*?</system-status>\s*', '', first_prompt, flags=re.DOTALL)
+    title = first_prompt.strip()[:40]
+    return title if title else "New Chat"

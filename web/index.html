@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claude Agent</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='%23D97757'%3E%3Cpath d='m3.127 10.604 3.135-1.76.053-.153-.053-.085H6.11l-.525-.032-1.791-.048-1.554-.065-1.505-.08-.38-.081L0 7.832l.036-.234.32-.214.455.04 1.009.069 1.513.105 1.097.064 1.626.17h.259l.036-.105-.089-.065-.068-.064-1.566-1.062-1.695-1.121-.887-.646-.48-.327-.243-.306-.104-.67.435-.48.585.04.15.04.593.456 1.267.981 1.654 1.218.242.202.097-.068.012-.049-.109-.181-.9-1.626-.96-1.655-.428-.686-.113-.411a2 2 0 0 1-.068-.484l.496-.674L4.446 0l.662.089.279.242.411.94.666 1.48 1.033 2.014.302.597.162.553.06.17h.105v-.097l.085-1.134.157-1.392.154-1.792.052-.504.25-.605.497-.327.387.186.319.456-.045.294-.19 1.23-.37 1.93-.243 1.29h.142l.161-.16.654-.868 1.097-1.372.484-.545.565-.601.363-.287h.686l.505.751-.226.775-.707.895-.585.759-.839 1.13-.524.904.048.072.125-.012 1.897-.403 1.024-.186 1.223-.21.553.258.06.263-.218.536-1.307.323-1.533.307-2.284.54-.028.02.032.04 1.029.098.44.024h1.077l2.005.15.525.346.315.424-.053.323-.807.411-3.631-.863-.872-.218h-.12v.073l.726.71 1.331 1.202 1.667 1.55.084.383-.214.302-.226-.032-1.464-1.101-.565-.497-1.28-1.077h-.084v.113l.295.432 1.557 2.34.08.718-.112.234-.404.141-.444-.08-.911-1.28-.94-1.44-.759-1.291-.093.053-.448 4.821-.21.246-.484.186-.403-.307-.214-.496.214-.98.258-1.28.21-1.016.19-1.263.112-.42-.008-.028-.092.012-.953 1.307-1.448 1.957-1.146 1.227-.274.109-.477-.247.045-.44.266-.39 1.586-2.018.956-1.25.617-.723-.004-.105h-.036l-4.212 2.736-.75.096-.324-.302.04-.496.154-.162 1.267-.871z'/%3E%3C/svg%3E">
+    <meta name="description" content="Claude Agent SDK - Elegant Chat Interface">
+    <link rel="stylesheet" href="/static/style.css">
+    <!-- Marked.js for markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- Highlight.js for code syntax highlighting -->
+    <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/atom-one-dark.min.css">
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <button class="new-chat-btn" id="newChatBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                    New Conversation
+                </button>
+            </div>
+            <div class="sidebar-content">
+                <!-- Agent Selector -->
+                <div class="sidebar-section">
+                    <h3>Agent</h3>
+                    <select id="agentSelector" class="agent-select">
+                        <option value="default">Loading...</option>
+                    </select>
+                    <div class="agent-status" id="agentStatus">
+                        <span class="status-dot"></span>
+                        <span>Ready</span>
+                    </div>
+                </div>
+                <!-- History Conversations -->
+                <div class="sidebar-section sessions-section">
+                    <h3>History</h3>
+                    <div class="sessions-list" id="sessionsList">
+                        <div class="sessions-loading">Loading...</div>
+                    </div>
+                </div>
+            </div>
+            <div class="sidebar-footer">
+                <a href="/settings" class="settings-icon-btn" title="Settings">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                    </svg>
+                </a>
+                <div class="app-info">
+                    <span>Claude Agent SDK</span>
+                </div>
+            </div>
+        </aside>
+        <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+        <!-- Main Chat Area -->
+        <main class="chat-main">
+            <!-- Chat Header -->
+            <header class="chat-header">
+                <button class="mobile-menu-btn" id="mobileMenuBtn" title="Toggle menu">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="3" y1="12" x2="21" y2="12"/>
+                        <line x1="3" y1="6" x2="21" y2="6"/>
+                        <line x1="3" y1="18" x2="21" y2="18"/>
+                    </svg>
+                </button>
+                <div class="chat-title">
+                    <svg class="logo-icon" width="28" height="28" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="m3.127 10.604 3.135-1.76.053-.153-.053-.085H6.11l-.525-.032-1.791-.048-1.554-.065-1.505-.08-.38-.081L0 7.832l.036-.234.32-.214.455.04 1.009.069 1.513.105 1.097.064 1.626.17h.259l.036-.105-.089-.065-.068-.064-1.566-1.062-1.695-1.121-.887-.646-.48-.327-.243-.306-.104-.67.435-.48.585.04.15.04.593.456 1.267.981 1.654 1.218.242.202.097-.068.012-.049-.109-.181-.9-1.626-.96-1.655-.428-.686-.113-.411a2 2 0 0 1-.068-.484l.496-.674L4.446 0l.662.089.279.242.411.94.666 1.48 1.033 2.014.302.597.162.553.06.17h.105v-.097l.085-1.134.157-1.392.154-1.792.052-.504.25-.605.497-.327.387.186.319.456-.045.294-.19 1.23-.37 1.93-.243 1.29h.142l.161-.16.654-.868 1.097-1.372.484-.545.565-.601.363-.287h.686l.505.751-.226.775-.707.895-.585.759-.839 1.13-.524.904.048.072.125-.012 1.897-.403 1.024-.186 1.223-.21.553.258.06.263-.218.536-1.307.323-1.533.307-2.284.54-.028.02.032.04 1.029.098.44.024h1.077l2.005.15.525.346.315.424-.053.323-.807.411-3.631-.863-.872-.218h-.12v.073l.726.71 1.331 1.202 1.667 1.55.084.383-.214.302-.226-.032-1.464-1.101-.565-.497-1.28-1.077h-.084v.113l.295.432 1.557 2.34.08.718-.112.234-.404.141-.444-.08-.911-1.28-.94-1.44-.759-1.291-.093.053-.448 4.821-.21.246-.484.186-.403-.307-.214-.496.214-.98.258-1.28.21-1.016.19-1.263.112-.42-.008-.028-.092.012-.953 1.307-1.448 1.957-1.146 1.227-.274.109-.477-.247.045-.44.266-.39 1.586-2.018.956-1.25.617-.723-.004-.105h-.036l-4.212 2.736-.75.096-.324-.302.04-.496.154-.162 1.267-.871z"/>
+                    </svg>
+                    <h1>Claude Agent</h1>
+                </div>
+                <!-- Header Actions -->
+                <div class="header-actions">
+                    <button class="header-action-btn" id="searchToggleBtn" title="Search messages">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="8"/>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                        </svg>
+                    </button>
+                    <button class="header-action-btn" id="bookmarksToggleBtn" title="View bookmarks">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+                        </svg>
+                    </button>
+                    <button class="header-action-btn" id="exportBtn" title="Export chat">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="7 10 12 15 17 10"/>
+                            <line x1="12" y1="15" x2="12" y2="3"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="role-indicator" id="roleIndicator">
+                    <span class="role-label">Agent:</span>
+                    <span class="role-name" id="roleName">Loading...</span>
+                    <span class="role-status" id="roleStatus">
+                        <svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor">
+                            <circle cx="12" cy="12" r="10"/>
+                        </svg>
+                    </span>
+                </div>
+            </header>
+
+            <!-- Task Status Bar -->
+            <div class="task-bar" id="taskBar">
+                <div class="task-bar-header">
+                    <div class="task-bar-label">Active Tasks</div>
+                    <button class="task-refresh-btn" id="taskRefreshBtn" title="Refresh tasks">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="23 4 23 10 17 10"/>
+                            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="task-items" id="taskItems">
+                    <!-- Dynamically populated -->
+                </div>
+            </div>
+
+            <!-- Search Bar -->
+            <div class="search-bar" id="searchBar">
+                <div class="search-input-wrapper">
+                    <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"/>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                    </svg>
+                    <input type="text" id="searchInput" class="search-input" placeholder="Search messages...">
+                    <span class="search-results-count" id="searchResultsCount"></span>
+                    <div class="search-nav-btns">
+                        <button class="search-nav-btn" id="searchPrevBtn" title="Previous result">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="18 15 12 9 6 15"/>
+                            </svg>
+                        </button>
+                        <button class="search-nav-btn" id="searchNextBtn" title="Next result">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="6 9 12 15 18 9"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <button class="search-close-btn" id="searchCloseBtn" title="Close search">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"/>
+                            <line x1="6" y1="6" x2="18" y2="18"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Toast Notification -->
+            <div class="toast-container" id="toastContainer"></div>
+
+            <!-- Messages Container -->
+            <div class="messages-container" id="messagesContainer">
+                <div class="messages-wrapper" id="messagesWrapper">
+                    <!-- Welcome message -->
+                    <div class="welcome-message" id="welcomeMessage">
+                        <div class="welcome-icon">
+                            <svg width="56" height="56" viewBox="0 0 16 16" fill="#D97757">
+                                <path d="m3.127 10.604 3.135-1.76.053-.153-.053-.085H6.11l-.525-.032-1.791-.048-1.554-.065-1.505-.08-.38-.081L0 7.832l.036-.234.32-.214.455.04 1.009.069 1.513.105 1.097.064 1.626.17h.259l.036-.105-.089-.065-.068-.064-1.566-1.062-1.695-1.121-.887-.646-.48-.327-.243-.306-.104-.67.435-.48.585.04.15.04.593.456 1.267.981 1.654 1.218.242.202.097-.068.012-.049-.109-.181-.9-1.626-.96-1.655-.428-.686-.113-.411a2 2 0 0 1-.068-.484l.496-.674L4.446 0l.662.089.279.242.411.94.666 1.48 1.033 2.014.302.597.162.553.06.17h.105v-.097l.085-1.134.157-1.392.154-1.792.052-.504.25-.605.497-.327.387.186.319.456-.045.294-.19 1.23-.37 1.93-.243 1.29h.142l.161-.16.654-.868 1.097-1.372.484-.545.565-.601.363-.287h.686l.505.751-.226.775-.707.895-.585.759-.839 1.13-.524.904.048.072.125-.012 1.897-.403 1.024-.186 1.223-.21.553.258.06.263-.218.536-1.307.323-1.533.307-2.284.54-.028.02.032.04 1.029.098.44.024h1.077l2.005.15.525.346.315.424-.053.323-.807.411-3.631-.863-.872-.218h-.12v.073l.726.71 1.331 1.202 1.667 1.55.084.383-.214.302-.226-.032-1.464-1.101-.565-.497-1.28-1.077h-.084v.113l.295.432 1.557 2.34.08.718-.112.234-.404.141-.444-.08-.911-1.28-.94-1.44-.759-1.291-.093.053-.448 4.821-.21.246-.484.186-.403-.307-.214-.496.214-.98.258-1.28.21-1.016.19-1.263.112-.42-.008-.028-.092.012-.953 1.307-1.448 1.957-1.146 1.227-.274.109-.477-.247.045-.44.266-.39 1.586-2.018.956-1.25.617-.723-.004-.105h-.036l-4.212 2.736-.75.096-.324-.302.04-.496.154-.162 1.267-.871z"/>
+                            </svg>
+                        </div>
+                        <h2>Welcome</h2>
+                        <p>Start a conversation with your AI assistant</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input Area -->
+            <div class="input-area">
+                <div class="input-container">
+                    <div class="attachment-preview" id="attachmentPreview"></div>
+                    <textarea id="messageInput" placeholder="Type your message..." rows="1" autofocus></textarea>
+                    <button class="attach-btn" id="attachBtn" title="Attach file">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                            <circle cx="8.5" cy="8.5" r="1.5" />
+                            <polyline points="21 15 16 10 5 21" />
+                        </svg>
+                    </button>
+                    <input type="file" id="fileInput"
+                        accept="image/*,.pdf,.txt,.md,.json,.csv,.html,.css,.js,.ts,.py,.java,.xml,.yaml,.yml" multiple
+                        style="display: none;">
+                    <button class="send-btn" id="sendBtn" disabled>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                    </button>
+                </div>
+                <div class="input-footer">
+                    <span class="input-hint">Press Enter to send, Shift+Enter for new line</span>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Session Rename Modal -->
+    <div class="modal" id="renameModal">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Rename Session</h3>
+                <button type="button" class="modal-close" id="closeRenameModalBtn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="sessionNameInput">Session Name</label>
+                    <input type="text" id="sessionNameInput" class="form-input" placeholder="Enter session name">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" id="cancelRenameBtn">Cancel</button>
+                <button type="button" class="btn btn-primary" id="confirmRenameBtn">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div class="modal" id="deleteModal">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Clear Conversation</h3>
+                <button type="button" class="modal-close" id="closeDeleteModalBtn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p id="deleteConfirmText">Are you sure you want to clear this conversation?</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" id="cancelDeleteBtn">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirmDeleteBtn">Clear</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bookmarks Panel -->
+    <div class="bookmarks-panel" id="bookmarksPanel">
+        <div class="bookmarks-backdrop"></div>
+        <div class="bookmarks-content">
+            <div class="bookmarks-header">
+                <h3>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+                    </svg>
+                    Bookmarked Messages
+                </h3>
+                <button type="button" class="bookmarks-close" id="closeBookmarksBtn">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"/>
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="bookmarks-body" id="bookmarksList">
+                <!-- Dynamically populated -->
+            </div>
+            <div class="bookmarks-footer">
+                <button class="btn btn-secondary" id="clearBookmarksBtn">Clear All</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Keyboard Shortcuts Panel -->
+    <div class="shortcuts-panel" id="shortcutsPanel">
+        <div class="shortcuts-backdrop"></div>
+        <div class="shortcuts-content">
+            <div class="shortcuts-header">
+                <h3>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="4" width="20" height="16" rx="2"/>
+                        <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M9 16h6"/>
+                    </svg>
+                    Keyboard Shortcuts
+                </h3>
+                <button type="button" class="shortcuts-close" id="closeShortcutsBtn">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="shortcuts-body">
+                <div class="shortcuts-section">
+                    <div class="shortcuts-section-title">Navigation</div>
+                    <div class="shortcut-row">
+                        <span class="shortcut-desc">Focus message input</span>
+                        <span class="shortcut-keys"><kbd class="kbd">/</kbd></span>
+                    </div>
+                    <div class="shortcut-row">
+                        <span class="shortcut-desc">Clear & focus input</span>
+                        <span class="shortcut-keys"><kbd class="kbd">Ctrl</kbd><span class="kbd-plus">+</span><kbd class="kbd">K</kbd></span>
+                    </div>
+                    <div class="shortcut-row">
+                        <span class="shortcut-desc">Search messages</span>
+                        <span class="shortcut-keys"><kbd class="kbd">Ctrl</kbd><span class="kbd-plus">+</span><kbd class="kbd">F</kbd></span>
+                    </div>
+                    <div class="shortcut-row">
+                        <span class="shortcut-desc">View bookmarks</span>
+                        <span class="shortcut-keys"><kbd class="kbd">Ctrl</kbd><span class="kbd-plus">+</span><kbd class="kbd">B</kbd></span>
+                    </div>
+                    <div class="shortcut-row">
+                        <span class="shortcut-desc">Export chat</span>
+                        <span class="shortcut-keys"><kbd class="kbd">Ctrl</kbd><span class="kbd-plus">+</span><kbd class="kbd">E</kbd></span>
+                    </div>
+                    <div class="shortcut-row">
+                        <span class="shortcut-desc">Open settings</span>
+                        <span class="shortcut-keys"><kbd class="kbd">Ctrl</kbd><span class="kbd-plus">+</span><kbd class="kbd">,</kbd></span>
+                    </div>
+                </div>
+                <div class="shortcuts-section">
+                    <div class="shortcuts-section-title">Conversation</div>
+                    <div class="shortcut-row">
+                        <span class="shortcut-desc">New conversation</span>
+                        <span class="shortcut-keys"><kbd class="kbd">Ctrl</kbd><span class="kbd-plus">+</span><kbd class="kbd">N</kbd></span>
+                    </div>
+                    <div class="shortcut-row">
+                        <span class="shortcut-desc">Stop generation</span>
+                        <span class="shortcut-keys"><kbd class="kbd">Esc</kbd></span>
+                    </div>
+                </div>
+                <div class="shortcuts-section">
+                    <div class="shortcuts-section-title">Display</div>
+                    <div class="shortcut-row">
+                        <span class="shortcut-desc">Toggle theme</span>
+                        <span class="shortcut-keys"><kbd class="kbd">Ctrl</kbd><span class="kbd-plus">+</span><kbd class="kbd">T</kbd></span>
+                    </div>
+                    <div class="shortcut-row">
+                        <span class="shortcut-desc">Show shortcuts</span>
+                        <span class="shortcut-keys"><kbd class="kbd">Ctrl</kbd><span class="kbd-plus">+</span><kbd class="kbd">/</kbd></span>
+                    </div>
+                </div>
+                <div class="shortcuts-section">
+                    <div class="shortcuts-section-title">Input</div>
+                    <div class="shortcut-row">
+                        <span class="shortcut-desc">Send message</span>
+                        <span class="shortcut-keys"><kbd class="kbd">Enter</kbd></span>
+                    </div>
+                    <div class="shortcut-row">
+                        <span class="shortcut-desc">New line</span>
+                        <span class="shortcut-keys"><kbd class="kbd">Shift</kbd><span class="kbd-plus">+</span><kbd class="kbd">Enter</kbd></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right Side Status Drawer -->
+    <div class="status-drawer" id="statusDrawer">
+        <div class="status-drawer-backdrop"></div>
+        <div class="status-drawer-content">
+            <div class="status-drawer-header">
+                <h3>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                    </svg>
+                    Task Status
+                </h3>
+                <button type="button" class="status-drawer-close" id="closeStatusDrawerBtn">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="status-drawer-body">
+                <!-- Task List Section -->
+                <div class="drawer-section">
+                    <div class="drawer-section-header">
+                        <span class="drawer-section-title">Tasks</span>
+                        <button class="drawer-action-btn" id="refreshTasksBtn" title="Refresh tasks (R)">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="23 4 23 10 17 10"/>
+                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <!-- Task Filter Tabs -->
+                    <div class="task-filter-tabs" id="taskFilterTabs">
+                        <button class="task-filter-tab active" data-filter="all">
+                            All <span class="task-filter-count" id="filterCountAll">0</span>
+                        </button>
+                        <button class="task-filter-tab" data-filter="running">
+                            Running <span class="task-filter-count" id="filterCountRunning">0</span>
+                        </button>
+                        <button class="task-filter-tab" data-filter="done">
+                            Done <span class="task-filter-count" id="filterCountDone">0</span>
+                        </button>
+                        <button class="task-filter-tab" data-filter="blocked">
+                            Blocked <span class="task-filter-count" id="filterCountBlocked">0</span>
+                        </button>
+                    </div>
+                    <div class="drawer-task-list" id="drawerTaskList">
+                        <div class="drawer-empty-state">No tasks</div>
+                    </div>
+                </div>
+
+                <!-- Add Task Section -->
+                <div class="drawer-section">
+                    <div class="drawer-section-header">
+                        <span class="drawer-section-title">Register Task</span>
+                        <button class="drawer-action-btn drawer-collapse-btn" data-target="addTaskForm">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="6 9 12 15 18 9"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="drawer-form" id="addTaskForm">
+                        <div class="form-group">
+                            <label for="newTaskId">Task ID</label>
+                            <input type="text" id="newTaskId" class="form-input" placeholder="e.g., frontend_v2">
+                        </div>
+                        <div class="form-group">
+                            <label for="newTaskDesc">Description</label>
+                            <input type="text" id="newTaskDesc" class="form-input" placeholder="Task description">
+                        </div>
+                        <div class="form-group">
+                            <label for="newTaskTimeout">Timeout (minutes)</label>
+                            <input type="number" id="newTaskTimeout" class="form-input" value="20" min="1" max="1440">
+                        </div>
+                        <button class="btn btn-primary btn-block" id="registerTaskBtn">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="12" y1="5" x2="12" y2="19"/>
+                                <line x1="5" y1="12" x2="19" y2="12"/>
+                            </svg>
+                            Register Task
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Patrol Task Section -->
+                <div class="drawer-section">
+                    <div class="drawer-section-header">
+                        <span class="drawer-section-title">Patrol Task</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="patrolEnabled">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="drawer-form" id="patrolTaskForm">
+                        <div class="form-group">
+                            <label for="patrolInterval">Interval (minutes)</label>
+                            <input type="number" id="patrolInterval" class="form-input" value="5" min="1" max="60">
+                        </div>
+                        <div class="form-group">
+                            <label for="patrolMessage">Message to send</label>
+                            <textarea id="patrolMessage" class="form-input form-textarea" rows="2" placeholder="Check task progress"></textarea>
+                        </div>
+                        <div class="patrol-status" id="patrolStatus">
+                            <span class="patrol-status-label">Status:</span>
+                            <span class="patrol-status-value" id="patrolStatusValue">Disabled</span>
+                        </div>
+                        <!-- Patrol History -->
+                        <div class="patrol-history" id="patrolHistory">
+                            <div class="patrol-history-header">
+                                <span class="patrol-history-title">Recent History</span>
+                                <button class="patrol-history-clear" id="clearPatrolHistoryBtn">Clear</button>
+                            </div>
+                            <div class="patrol-history-list" id="patrolHistoryList">
+                                <div class="drawer-empty-state" style="padding: 10px; font-size: 11px;">No history yet</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Scheduled Task Section -->
+                <div class="drawer-section">
+                    <div class="drawer-section-header">
+                        <span class="drawer-section-title">Scheduled Tasks</span>
+                        <div class="drawer-header-actions">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="scheduledTasksEnabled">
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <button class="drawer-action-btn" id="addScheduledTaskBtn" title="Add scheduled task">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="12" y1="5" x2="12" y2="19"/>
+                                    <line x1="5" y1="12" x2="19" y2="12"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="scheduled-task-list" id="scheduledTaskList">
+                        <div class="drawer-empty-state">No scheduled tasks</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Scheduled Task Modal -->
+    <div class="modal" id="scheduledTaskModal">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Add Scheduled Task</h3>
+                <button type="button" class="modal-close" id="closeScheduledTaskModalBtn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="scheduledTaskTime">Execute Time</label>
+                    <input type="time" id="scheduledTaskTime" class="form-input">
+                </div>
+                <div class="form-group">
+                    <label for="scheduledTaskMessage">Message to send</label>
+                    <textarea id="scheduledTaskMessage" class="form-input form-textarea" rows="3" placeholder="Message content"></textarea>
+                </div>
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="scheduledTaskRepeat">
+                        <span>Repeat daily</span>
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" id="cancelScheduledTaskBtn">Cancel</button>
+                <button type="button" class="btn btn-primary" id="saveScheduledTaskBtn">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Status Drawer Toggle Button (Fixed on right side) -->
+    <button class="status-drawer-toggle" id="statusDrawerToggle" title="Task Status (T)">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+        </svg>
+        <span class="task-badge" id="taskBadge" style="display: none;">0</span>
+    </button>
+
+    <!-- Toast Container for Notifications -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- i18n Module -->
+    <script src="/static/i18n.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+
+</html>

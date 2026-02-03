@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "jarvis": {
+      "type": "http",
+      "url": "http://localhost:6790/mcp/mcp"
+    },
+    "xiaohongshu-mcp": {
+      "type": "http",
+      "url": "http://localhost:18060/mcp"
+    },
+    "media-crawler-mcp": {
+      "type": "http",
+      "url": "http://localhost:9090/mcp"
+    }
+  }
+}
