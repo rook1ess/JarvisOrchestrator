@@ -7,7 +7,10 @@
 const state = {
     instances: [],
     tools: [],
+    mcpServers: [],
+    availableTools: [],
     selectedInstance: null,
+    currentDetailInstance: null,
     refreshInterval: null
 };
 
@@ -22,12 +25,41 @@ const elements = {
     refreshBtn: document.getElementById('refreshBtn'),
     restartAllBtn: document.getElementById('restartAllBtn'),
     lastUpdate: document.getElementById('lastUpdate'),
+    // Message Modal
     messageModal: document.getElementById('messageModal'),
     modalInstanceId: document.getElementById('modalInstanceId'),
     messageInput: document.getElementById('messageInput'),
     modalClose: document.getElementById('modalClose'),
     modalCancel: document.getElementById('modalCancel'),
-    modalSend: document.getElementById('modalSend')
+    modalSend: document.getElementById('modalSend'),
+    // Detail Modal
+    instanceDetailModal: document.getElementById('instanceDetailModal'),
+    detailInstanceId: document.getElementById('detailInstanceId'),
+    detailStatus: document.getElementById('detailStatus'),
+    detailSessionId: document.getElementById('detailSessionId'),
+    detailQueueSize: document.getElementById('detailQueueSize'),
+    detailLastActive: document.getElementById('detailLastActive'),
+    detailModalClose: document.getElementById('detailModalClose'),
+    detailCancelBtn: document.getElementById('detailCancelBtn'),
+    detailSaveBtn: document.getElementById('detailSaveBtn'),
+    detailDeleteBtn: document.getElementById('detailDeleteBtn'),
+    // Config fields
+    configModel: document.getElementById('configModel'),
+    configPermissionMode: document.getElementById('configPermissionMode'),
+    configMcpEnabled: document.getElementById('configMcpEnabled'),
+    mcpServersGrid: document.getElementById('mcpServersGrid'),
+    toolsCheckboxGrid: document.getElementById('toolsCheckboxGrid'),
+    configSystemPrompt: document.getElementById('configSystemPrompt'),
+    // New Instance Modal
+    newInstanceBtn: document.getElementById('newInstanceBtn'),
+    newInstanceModal: document.getElementById('newInstanceModal'),
+    newInstanceClose: document.getElementById('newInstanceClose'),
+    newInstanceCancel: document.getElementById('newInstanceCancel'),
+    newInstanceCreate: document.getElementById('newInstanceCreate'),
+    newInstanceId: document.getElementById('newInstanceId'),
+    newConfigModel: document.getElementById('newConfigModel'),
+    newConfigPermissionMode: document.getElementById('newConfigPermissionMode'),
+    newConfigMcpEnabled: document.getElementById('newConfigMcpEnabled')
 };
 
 // API Functions
@@ -71,6 +103,94 @@ async function fetchMCPTools() {
     } catch (error) {
         console.error('Error fetching MCP tools:', error);
         return [];
+    }
+}
+
+async function fetchMCPServers() {
+    try {
+        const response = await fetch('/api/mcp-servers');
+        if (!response.ok) throw new Error('Failed to fetch MCP servers');
+        return await response.json();
+    } catch (error) {
+        console.error('Error fetching MCP servers:', error);
+        return [];
+    }
+}
+
+async function fetchAvailableTools() {
+    try {
+        const response = await fetch('/api/available-tools');
+        if (!response.ok) throw new Error('Failed to fetch available tools');
+        return await response.json();
+    } catch (error) {
+        console.error('Error fetching available tools:', error);
+        return [];
+    }
+}
+
+async function fetchInstanceConfig(instanceId) {
+    try {
+        const response = await fetch(`/api/instances/${encodeURIComponent(instanceId)}/config`);
+        if (!response.ok) {
+            if (response.status === 404) {
+                // No config file, return defaults
+                return { merged_config: {}, instance_overrides: {} };
+            }
+            throw new Error('Failed to fetch config');
+        }
+        return await response.json();
+    } catch (error) {
+        console.error('Error fetching instance config:', error);
+        return { merged_config: {}, instance_overrides: {} };
+    }
+}
+
+async function saveInstanceConfig(instanceId, config) {
+    try {
+        const response = await fetch(`/api/instances/${encodeURIComponent(instanceId)}/config`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config)
+        });
+        if (!response.ok) throw new Error('Failed to save config');
+        return await response.json();
+    } catch (error) {
+        console.error('Error saving config:', error);
+        throw error;
+    }
+}
+
+async function createInstance(data) {
+    try {
+        const response = await fetch('/api/instances', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.detail || 'Failed to create instance');
+        }
+        return await response.json();
+    } catch (error) {
+        console.error('Error creating instance:', error);
+        throw error;
+    }
+}
+
+async function deleteInstance(instanceId) {
+    try {
+        const response = await fetch(`/api/instances/${encodeURIComponent(instanceId)}`, {
+            method: 'DELETE'
+        });
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.detail || 'Failed to delete instance');
+        }
+        return await response.json();
+    } catch (error) {
+        console.error('Error deleting instance:', error);
+        throw error;
     }
 }
 
@@ -171,12 +291,27 @@ function createInstanceCard(instance) {
         </div>
     `;
 
-    // Event listeners
+    // Click on card (not buttons) opens detail modal
+    card.addEventListener('click', (e) => {
+        // Don't open detail if clicking on action buttons or links
+        if (e.target.closest('.instance-btn') || e.target.closest('a')) {
+            return;
+        }
+        openDetailModal(instance);
+    });
+
+    // Event listeners for buttons
     const messageBtn = card.querySelector('.instance-btn.message');
     const restartBtn = card.querySelector('.instance-btn.restart');
 
-    messageBtn?.addEventListener('click', () => openMessageModal(instance.instance_id));
-    restartBtn?.addEventListener('click', () => handleRestart(instance.instance_id));
+    messageBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openMessageModal(instance.instance_id);
+    });
+    restartBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        handleRestart(instance.instance_id);
+    });
 
     return card;
 }
@@ -187,7 +322,7 @@ function renderInstances() {
             <div class="empty-state">
                 <div class="empty-icon">☽</div>
                 <p>No instances found</p>
-                <p style="font-size: 0.9rem; margin-top: 8px;">Send a message to create one</p>
+                <p style="font-size: 0.9rem; margin-top: 8px;">Click "+ New Instance" to create one</p>
             </div>
         `;
         return;
@@ -241,6 +376,54 @@ function renderTools() {
     });
 }
 
+function renderMCPServersCheckboxes(disabledList = []) {
+    if (state.mcpServers.length === 0) {
+        elements.mcpServersGrid.innerHTML = '<p class="no-mcp-servers">No MCP servers found</p>';
+        return;
+    }
+
+    elements.mcpServersGrid.innerHTML = '';
+    state.mcpServers.forEach(server => {
+        const isEnabled = !disabledList.includes(server.name);
+        const sourceLabel = server.source === 'user' ? 'USER' : 'PROJECT';
+        const sourceClass = server.source === 'user' ? 'source-user' : 'source-project';
+        const item = document.createElement('div');
+        item.className = 'mcp-server-item';
+        item.innerHTML = `
+            <input type="checkbox" id="mcp_${escapeHtml(server.name)}"
+                   data-server="${escapeHtml(server.name)}"
+                   ${isEnabled ? 'checked' : ''}>
+            <label for="mcp_${escapeHtml(server.name)}">${escapeHtml(server.name)}</label>
+            <span class="server-source ${sourceClass}">${sourceLabel}</span>
+        `;
+        elements.mcpServersGrid.appendChild(item);
+    });
+
+    // Update disabled state based on MCP enabled checkbox
+    updateMcpGridState();
+}
+
+function renderToolsCheckboxes(allowedTools = []) {
+    elements.toolsCheckboxGrid.innerHTML = '';
+    state.availableTools.forEach(tool => {
+        const isAllowed = allowedTools.length === 0 || allowedTools.includes(tool.id);
+        const item = document.createElement('div');
+        item.className = 'tool-checkbox-item';
+        item.innerHTML = `
+            <input type="checkbox" id="tool_${escapeHtml(tool.id)}"
+                   data-tool="${escapeHtml(tool.id)}"
+                   ${isAllowed ? 'checked' : ''}>
+            <label for="tool_${escapeHtml(tool.id)}" title="${escapeHtml(tool.description || '')}">${escapeHtml(tool.name)}</label>
+        `;
+        elements.toolsCheckboxGrid.appendChild(item);
+    });
+}
+
+function updateMcpGridState() {
+    const isEnabled = elements.configMcpEnabled.checked;
+    elements.mcpServersGrid.classList.toggle('disabled', !isEnabled);
+}
+
 function updateTimestamp() {
     const now = new Date();
     elements.lastUpdate.textContent = `Last updated: ${now.toLocaleTimeString()}`;
@@ -252,13 +435,17 @@ async function handleRefresh() {
     elements.refreshBtn.innerHTML = '<span class="refresh-icon" style="animation: spin 0.5s linear infinite;">↻</span> Loading...';
 
     try {
-        const [instances, tools] = await Promise.all([
+        const [instances, tools, mcpServers, availableTools] = await Promise.all([
             fetchInstances(),
-            fetchMCPTools()
+            fetchMCPTools(),
+            fetchMCPServers(),
+            fetchAvailableTools()
         ]);
 
         state.instances = instances;
         state.tools = tools;
+        state.mcpServers = mcpServers;
+        state.availableTools = availableTools;
 
         updateSummary();
         renderInstances();
@@ -306,6 +493,7 @@ async function handleRestartAll() {
     }
 }
 
+// Message Modal
 function openMessageModal(instanceId) {
     state.selectedInstance = instanceId;
     elements.modalInstanceId.textContent = instanceId;
@@ -332,6 +520,180 @@ async function handleSendMessage() {
     }
 }
 
+// Detail Modal
+async function openDetailModal(instance) {
+    state.currentDetailInstance = instance;
+    elements.detailInstanceId.textContent = instance.instance_id;
+
+    // Fill status section
+    const statusText = instance.is_processing ? 'Processing' :
+                       instance.status.charAt(0).toUpperCase() + instance.status.slice(1);
+    elements.detailStatus.textContent = statusText;
+    elements.detailSessionId.textContent = instance.session_id ? instance.session_id.slice(0, 16) + '...' : '—';
+    elements.detailQueueSize.textContent = `${instance.queue_size} messages`;
+    elements.detailLastActive.textContent = formatTimestamp(instance.last_active_at);
+
+    // Fetch and fill config
+    const { merged_config, instance_overrides } = await fetchInstanceConfig(instance.instance_id);
+
+    // Model
+    elements.configModel.value = merged_config.model || 'sonnet';
+
+    // Permission mode
+    elements.configPermissionMode.value = merged_config.permission_mode || 'bypassPermissions';
+
+    // MCP enabled
+    elements.configMcpEnabled.checked = merged_config.mcp_enabled !== false;
+
+    // MCP servers (show checkboxes with disabled ones unchecked)
+    const disabledMcp = merged_config.mcp_servers_disabled || [];
+    renderMCPServersCheckboxes(disabledMcp);
+
+    // Tools
+    const allowedTools = merged_config.allowed_tools || [];
+    renderToolsCheckboxes(allowedTools);
+
+    // System prompt (only show override, not merged)
+    elements.configSystemPrompt.value = instance_overrides.system_prompt || '';
+
+    // Show modal
+    elements.instanceDetailModal.classList.add('active');
+}
+
+function closeDetailModal() {
+    state.currentDetailInstance = null;
+    elements.instanceDetailModal.classList.remove('active');
+}
+
+async function handleSaveConfig() {
+    if (!state.currentDetailInstance) return;
+
+    const instanceId = state.currentDetailInstance.instance_id;
+
+    // Collect config values
+    const config = {
+        model: elements.configModel.value,
+        permission_mode: elements.configPermissionMode.value,
+        mcp_enabled: elements.configMcpEnabled.checked
+    };
+
+    // Collect disabled MCP servers (unchecked ones)
+    const disabledMcp = [];
+    elements.mcpServersGrid.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        if (!cb.checked) {
+            disabledMcp.push(cb.dataset.server);
+        }
+    });
+    config.mcp_servers_disabled = disabledMcp;
+
+    // Collect allowed tools (checked ones)
+    const allowedTools = [];
+    elements.toolsCheckboxGrid.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        if (cb.checked) {
+            allowedTools.push(cb.dataset.tool);
+        }
+    });
+    config.allowed_tools = allowedTools;
+
+    // System prompt (only if not empty)
+    const systemPrompt = elements.configSystemPrompt.value.trim();
+    if (systemPrompt) {
+        config.system_prompt = systemPrompt;
+    }
+
+    try {
+        elements.detailSaveBtn.disabled = true;
+        elements.detailSaveBtn.textContent = 'Saving...';
+
+        const result = await saveInstanceConfig(instanceId, config);
+
+        if (result.restarted) {
+            alert(`Configuration saved and instance restarted successfully.`);
+        } else {
+            alert(`Configuration saved. Instance will use new config on next start.`);
+        }
+
+        closeDetailModal();
+        await handleRefresh();
+    } catch (error) {
+        alert(`Failed to save configuration: ${error.message}`);
+    } finally {
+        elements.detailSaveBtn.disabled = false;
+        elements.detailSaveBtn.textContent = 'Save & Restart';
+    }
+}
+
+async function handleDeleteInstance() {
+    if (!state.currentDetailInstance) return;
+
+    const instanceId = state.currentDetailInstance.instance_id;
+
+    if (!confirm(`Delete instance "${instanceId}"?\n\nThis will remove the configuration file. This action cannot be undone.`)) {
+        return;
+    }
+
+    try {
+        await deleteInstance(instanceId);
+        alert(`Instance "${instanceId}" deleted.`);
+        closeDetailModal();
+        await handleRefresh();
+    } catch (error) {
+        alert(`Failed to delete instance: ${error.message}`);
+    }
+}
+
+// New Instance Modal
+function openNewInstanceModal() {
+    elements.newInstanceId.value = '';
+    elements.newConfigModel.value = 'sonnet';
+    elements.newConfigPermissionMode.value = 'bypassPermissions';
+    elements.newConfigMcpEnabled.checked = true;
+    elements.newInstanceModal.classList.add('active');
+    elements.newInstanceId.focus();
+}
+
+function closeNewInstanceModal() {
+    elements.newInstanceModal.classList.remove('active');
+}
+
+async function handleCreateInstance() {
+    const instanceId = elements.newInstanceId.value.trim();
+    if (!instanceId) {
+        alert('Please enter an instance ID');
+        return;
+    }
+
+    // Validate instance ID format
+    if (!/^[a-zA-Z0-9_-]+$/.test(instanceId)) {
+        alert('Instance ID can only contain letters, numbers, hyphens, and underscores');
+        return;
+    }
+
+    const data = {
+        instance_id: instanceId,
+        model: elements.newConfigModel.value,
+        permission_mode: elements.newConfigPermissionMode.value,
+        mcp_enabled: elements.newConfigMcpEnabled.checked,
+        mcp_servers_disabled: [],
+        allowed_tools: state.availableTools.map(t => t.id) // Enable all tools by default
+    };
+
+    try {
+        elements.newInstanceCreate.disabled = true;
+        elements.newInstanceCreate.textContent = 'Creating...';
+
+        await createInstance(data);
+        alert(`Instance "${instanceId}" created successfully.`);
+        closeNewInstanceModal();
+        await handleRefresh();
+    } catch (error) {
+        alert(`Failed to create instance: ${error.message}`);
+    } finally {
+        elements.newInstanceCreate.disabled = false;
+        elements.newInstanceCreate.textContent = 'Create';
+    }
+}
+
 // Utilities
 function escapeHtml(text) {
     const div = document.createElement('div');
@@ -341,29 +703,58 @@ function escapeHtml(text) {
 
 // Initialize
 function init() {
-    // Event listeners
+    // Message Modal listeners
     elements.refreshBtn.addEventListener('click', handleRefresh);
     elements.restartAllBtn.addEventListener('click', handleRestartAll);
     elements.modalClose.addEventListener('click', closeMessageModal);
     elements.modalCancel.addEventListener('click', closeMessageModal);
     elements.modalSend.addEventListener('click', handleSendMessage);
 
-    // Close modal on overlay click
     elements.messageModal.addEventListener('click', (e) => {
         if (e.target === elements.messageModal) closeMessageModal();
     });
 
-    // Send on Enter (with Ctrl/Cmd)
     elements.messageInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
             handleSendMessage();
         }
     });
 
-    // Close modal on Escape
+    // Detail Modal listeners
+    elements.detailModalClose.addEventListener('click', closeDetailModal);
+    elements.detailCancelBtn.addEventListener('click', closeDetailModal);
+    elements.detailSaveBtn.addEventListener('click', handleSaveConfig);
+    elements.detailDeleteBtn.addEventListener('click', handleDeleteInstance);
+
+    elements.instanceDetailModal.addEventListener('click', (e) => {
+        if (e.target === elements.instanceDetailModal) closeDetailModal();
+    });
+
+    // MCP enabled toggle
+    elements.configMcpEnabled.addEventListener('change', updateMcpGridState);
+
+    // New Instance Modal listeners
+    elements.newInstanceBtn.addEventListener('click', openNewInstanceModal);
+    elements.newInstanceClose.addEventListener('click', closeNewInstanceModal);
+    elements.newInstanceCancel.addEventListener('click', closeNewInstanceModal);
+    elements.newInstanceCreate.addEventListener('click', handleCreateInstance);
+
+    elements.newInstanceModal.addEventListener('click', (e) => {
+        if (e.target === elements.newInstanceModal) closeNewInstanceModal();
+    });
+
+    elements.newInstanceId.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            handleCreateInstance();
+        }
+    });
+
+    // Close modals on Escape
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && elements.messageModal.classList.contains('active')) {
-            closeMessageModal();
+        if (e.key === 'Escape') {
+            if (elements.messageModal.classList.contains('active')) closeMessageModal();
+            if (elements.instanceDetailModal.classList.contains('active')) closeDetailModal();
+            if (elements.newInstanceModal.classList.contains('active')) closeNewInstanceModal();
         }
     });
 

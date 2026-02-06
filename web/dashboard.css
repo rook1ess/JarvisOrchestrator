@@ -874,3 +874,311 @@ body {
 ::-webkit-scrollbar-thumb:hover {
     background: var(--ink-faded);
 }
+
+/* Header Actions */
+.header-actions {
+    display: flex;
+    gap: var(--spacing-md);
+    align-items: center;
+}
+
+.action-btn {
+    font-family: 'Crimson Pro', serif;
+    font-size: 0.95rem;
+    color: var(--accent-emerald);
+    background: linear-gradient(135deg,
+        rgba(46, 95, 74, 0.15) 0%,
+        rgba(46, 95, 74, 0.05) 100%
+    );
+    border: 1px solid var(--accent-emerald);
+    border-radius: var(--radius-sm);
+    padding: var(--spacing-sm) var(--spacing-md);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    transition: all 0.2s ease;
+}
+
+.action-btn:hover {
+    background: linear-gradient(135deg,
+        rgba(46, 95, 74, 0.25) 0%,
+        rgba(46, 95, 74, 0.15) 100%
+    );
+    transform: translateY(-1px);
+}
+
+/* Large Modal for Detail View */
+.modal-large {
+    max-width: 700px;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.modal-large .modal-body {
+    padding: var(--spacing-md) var(--spacing-lg);
+}
+
+/* Detail Sections */
+.detail-section {
+    margin-bottom: var(--spacing-lg);
+    padding-bottom: var(--spacing-md);
+    border-bottom: 1px dashed var(--parchment-shadow);
+}
+
+.detail-section:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+}
+
+.detail-section-title {
+    font-family: 'Cinzel', serif;
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--ink-primary);
+    margin-bottom: var(--spacing-md);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+/* Status Grid */
+.status-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--spacing-md);
+}
+
+.status-item {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+}
+
+.status-label {
+    font-size: 0.85rem;
+    color: var(--ink-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.status-value {
+    font-family: 'IM Fell English', serif;
+    font-size: 1rem;
+    color: var(--ink-primary);
+}
+
+/* Config Form */
+.config-row {
+    margin-bottom: var(--spacing-md);
+}
+
+.config-label {
+    display: block;
+    font-size: 0.95rem;
+    color: var(--ink-secondary);
+    margin-bottom: var(--spacing-xs);
+}
+
+.config-label input[type="checkbox"] {
+    margin-right: var(--spacing-sm);
+    accent-color: var(--accent-gold);
+}
+
+.config-select,
+.config-input {
+    width: 100%;
+    padding: var(--spacing-sm) var(--spacing-md);
+    font-family: 'Crimson Pro', serif;
+    font-size: 1rem;
+    color: var(--ink-primary);
+    background: rgba(255, 255, 255, 0.5);
+    border: 1px solid var(--parchment-shadow);
+    border-radius: var(--radius-sm);
+    transition: all 0.2s ease;
+}
+
+.config-select:focus,
+.config-input:focus {
+    outline: none;
+    border-color: var(--accent-gold);
+    box-shadow: 0 0 0 3px rgba(184, 134, 11, 0.1);
+}
+
+.config-textarea {
+    width: 100%;
+    min-height: 120px;
+    padding: var(--spacing-md);
+    font-family: 'Crimson Pro', serif;
+    font-size: 0.95rem;
+    color: var(--ink-primary);
+    background: rgba(255, 255, 255, 0.5);
+    border: 1px solid var(--parchment-shadow);
+    border-radius: var(--radius-sm);
+    resize: vertical;
+    transition: all 0.2s ease;
+}
+
+.config-textarea:focus {
+    outline: none;
+    border-color: var(--accent-gold);
+    box-shadow: 0 0 0 3px rgba(184, 134, 11, 0.1);
+}
+
+.config-hint {
+    font-size: 0.85rem;
+    color: var(--ink-faded);
+    font-style: italic;
+    margin-top: var(--spacing-xs);
+}
+
+/* MCP Servers Grid */
+.mcp-servers-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-md);
+}
+
+.mcp-server-item {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: rgba(255, 255, 255, 0.4);
+    border: 1px solid var(--parchment-shadow);
+    border-radius: var(--radius-sm);
+    transition: all 0.2s ease;
+}
+
+.mcp-server-item:hover {
+    background: rgba(255, 255, 255, 0.6);
+}
+
+.mcp-server-item input[type="checkbox"] {
+    accent-color: var(--accent-emerald);
+}
+
+.mcp-server-item label {
+    font-size: 0.95rem;
+    color: var(--ink-primary);
+    cursor: pointer;
+    flex: 1;
+}
+
+.mcp-server-item .server-type {
+    font-size: 0.75rem;
+    color: var(--ink-faded);
+    text-transform: uppercase;
+}
+
+.mcp-server-item .server-source {
+    font-size: 0.65rem;
+    padding: 2px 6px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    font-weight: 500;
+    letter-spacing: 0.03em;
+}
+
+.mcp-server-item .server-source.source-project {
+    background: rgba(46, 95, 74, 0.15);
+    color: var(--accent-emerald);
+}
+
+.mcp-server-item .server-source.source-user {
+    background: rgba(184, 134, 11, 0.15);
+    color: var(--accent-gold);
+}
+
+/* Tools Checkbox Grid */
+.tools-checkbox-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: var(--spacing-sm);
+}
+
+.tool-checkbox-item {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-xs) var(--spacing-sm);
+    background: rgba(255, 255, 255, 0.3);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    transition: all 0.2s ease;
+}
+
+.tool-checkbox-item:hover {
+    background: rgba(255, 255, 255, 0.5);
+    border-color: var(--parchment-shadow);
+}
+
+.tool-checkbox-item input[type="checkbox"] {
+    accent-color: var(--accent-gold);
+}
+
+.tool-checkbox-item label {
+    font-size: 0.9rem;
+    color: var(--ink-secondary);
+    cursor: pointer;
+}
+
+/* Danger Button */
+.modal-btn.danger {
+    background: linear-gradient(135deg,
+        rgba(139, 68, 68, 0.2) 0%,
+        rgba(139, 68, 68, 0.1) 100%
+    );
+    border: 1px solid var(--status-stopped);
+    color: var(--status-stopped);
+}
+
+.modal-btn.danger:hover {
+    background: linear-gradient(135deg,
+        rgba(139, 68, 68, 0.3) 0%,
+        rgba(139, 68, 68, 0.2) 100%
+    );
+}
+
+/* Modal Footer with Multiple Buttons */
+.modal-footer {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--spacing-md);
+    padding: var(--spacing-lg);
+    border-top: 1px solid var(--parchment-shadow);
+}
+
+.modal-footer .modal-btn.danger {
+    margin-right: auto;
+}
+
+/* Instance Card Clickable */
+.instance-card {
+    cursor: pointer;
+}
+
+.instance-card .instance-actions {
+    position: relative;
+    z-index: 10;
+}
+
+.instance-card .instance-btn {
+    position: relative;
+    z-index: 10;
+}
+
+/* Disabled state for MCP section when disabled */
+.mcp-servers-grid.disabled {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+/* No MCP servers message */
+.no-mcp-servers {
+    padding: var(--spacing-md);
+    text-align: center;
+    color: var(--ink-muted);
+    font-style: italic;
+}

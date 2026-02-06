@@ -75,10 +75,15 @@
                     <span class="section-icon">&#x2756;</span>
                     Active Instances
                 </h2>
-                <button class="refresh-btn" id="refreshBtn" title="Refresh">
-                    <span class="refresh-icon">&#x21BB;</span>
-                    Refresh
-                </button>
+                <div class="header-actions">
+                    <button class="action-btn" id="newInstanceBtn" title="Create new instance">
+                        <span>&#x2795;</span> New Instance
+                    </button>
+                    <button class="refresh-btn" id="refreshBtn" title="Refresh">
+                        <span class="refresh-icon">&#x21BB;</span>
+                        Refresh
+                    </button>
+                </div>
             </div>
             <div class="instances-grid" id="instancesGrid">
                 <!-- Instance cards will be inserted here -->
@@ -154,6 +159,151 @@
             <div class="modal-footer">
                 <button class="modal-btn cancel" id="modalCancel">Cancel</button>
                 <button class="modal-btn send" id="modalSend">Send Message</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Instance Detail Modal -->
+    <div class="modal-overlay" id="instanceDetailModal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h3>
+                    <span class="modal-icon">&#x2699;</span>
+                    Instance: <span id="detailInstanceId"></span>
+                </h3>
+                <button class="modal-close" id="detailModalClose">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Status Section -->
+                <div class="detail-section">
+                    <h4 class="detail-section-title">&#x2605; Status</h4>
+                    <div class="status-grid">
+                        <div class="status-item">
+                            <span class="status-label">Status</span>
+                            <span class="status-value" id="detailStatus">—</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">Session ID</span>
+                            <span class="status-value" id="detailSessionId">—</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">Queue</span>
+                            <span class="status-value" id="detailQueueSize">—</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">Last Active</span>
+                            <span class="status-value" id="detailLastActive">—</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Configuration Section -->
+                <div class="detail-section">
+                    <h4 class="detail-section-title">&#x270E; Configuration</h4>
+
+                    <div class="config-row">
+                        <label class="config-label">Model</label>
+                        <select id="configModel" class="config-select">
+                            <option value="opus">Opus (Most Capable)</option>
+                            <option value="sonnet">Sonnet (Balanced)</option>
+                            <option value="haiku">Haiku (Fast)</option>
+                        </select>
+                    </div>
+
+                    <div class="config-row">
+                        <label class="config-label">Permission Mode</label>
+                        <select id="configPermissionMode" class="config-select">
+                            <option value="bypassPermissions">Bypass Permissions (Full Auto)</option>
+                            <option value="acceptEdits">Accept Edits (Auto-accept file edits)</option>
+                            <option value="plan">Plan Mode (Requires approval)</option>
+                            <option value="default">Default (Ask for everything)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- MCP Section -->
+                <div class="detail-section">
+                    <h4 class="detail-section-title">&#x2692; MCP Servers</h4>
+                    <div class="config-row">
+                        <label class="config-label">
+                            <input type="checkbox" id="configMcpEnabled" checked>
+                            Enable MCP
+                        </label>
+                    </div>
+                    <div class="mcp-servers-grid" id="mcpServersGrid">
+                        <!-- MCP server checkboxes will be inserted here -->
+                    </div>
+                </div>
+
+                <!-- Tools Section -->
+                <div class="detail-section">
+                    <h4 class="detail-section-title">&#x2756; Allowed Tools</h4>
+                    <div class="tools-checkbox-grid" id="toolsCheckboxGrid">
+                        <!-- Tool checkboxes will be inserted here -->
+                    </div>
+                </div>
+
+                <!-- System Prompt Section -->
+                <div class="detail-section">
+                    <h4 class="detail-section-title">&#x270D; System Prompt</h4>
+                    <textarea id="configSystemPrompt" class="config-textarea" placeholder="Enter system prompt..."></textarea>
+                    <p class="config-hint">Leave empty to use default from _default.json</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn danger" id="detailDeleteBtn">Delete</button>
+                <button class="modal-btn cancel" id="detailCancelBtn">Cancel</button>
+                <button class="modal-btn send" id="detailSaveBtn">Save & Restart</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- New Instance Modal -->
+    <div class="modal-overlay" id="newInstanceModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>
+                    <span class="modal-icon">&#x2795;</span>
+                    Create New Instance
+                </h3>
+                <button class="modal-close" id="newInstanceClose">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="config-row">
+                    <label class="config-label">Instance ID</label>
+                    <input type="text" id="newInstanceId" class="config-input" placeholder="e.g., my-agent">
+                    <p class="config-hint">Unique identifier for this instance</p>
+                </div>
+
+                <div class="config-row">
+                    <label class="config-label">Model</label>
+                    <select id="newConfigModel" class="config-select">
+                        <option value="sonnet" selected>Sonnet (Balanced)</option>
+                        <option value="opus">Opus (Most Capable)</option>
+                        <option value="haiku">Haiku (Fast)</option>
+                    </select>
+                </div>
+
+                <div class="config-row">
+                    <label class="config-label">Permission Mode</label>
+                    <select id="newConfigPermissionMode" class="config-select">
+                        <option value="bypassPermissions" selected>Bypass Permissions (Full Auto)</option>
+                        <option value="acceptEdits">Accept Edits</option>
+                        <option value="plan">Plan Mode</option>
+                        <option value="default">Default</option>
+                    </select>
+                </div>
+
+                <div class="config-row">
+                    <label class="config-label">
+                        <input type="checkbox" id="newConfigMcpEnabled" checked>
+                        Enable MCP
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn cancel" id="newInstanceCancel">Cancel</button>
+                <button class="modal-btn send" id="newInstanceCreate">Create</button>
             </div>
         </div>
     </div>

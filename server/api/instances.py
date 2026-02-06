@@ -1,8 +1,14 @@
 """实例发现与消息传递 API"""
 
-import time
+import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from typing import Optional, List
+
+from server.config import (
+    PROJECT_ROOT, INSTANCES_DIR, AVAILABLE_TOOLS,
+    load_instance_config
+)
 
 router = APIRouter()
 
@@ -19,6 +25,25 @@ def init(agent_manager, ws_channel):
 class SendMessageRequest(BaseModel):
     message: str
     source: str = "api"
+
+
+class InstanceConfigUpdate(BaseModel):
+    model: Optional[str] = None
+    permission_mode: Optional[str] = None
+    mcp_enabled: Optional[bool] = None
+    mcp_servers_disabled: Optional[List[str]] = None
+    allowed_tools: Optional[List[str]] = None
+    system_prompt: Optional[str] = None
+
+
+class CreateInstanceRequest(BaseModel):
+    instance_id: str
+    model: str = "sonnet"
+    permission_mode: str = "bypassPermissions"
+    mcp_enabled: bool = True
+    mcp_servers_disabled: List[str] = []
+    allowed_tools: List[str] = []
+    system_prompt: str = ""
 
 
 @router.get("/api/instances")
@@ -69,3 +94,180 @@ async def send_message(instance_id: str, req: SendMessageRequest):
         "status": "queued",
         "queue_position": inst.message_queue.qsize(),
     }
+
+
+@router.get("/api/instances/{instance_id}/config")
+async def get_instance_config(instance_id: str):
+    """获取实例配置（合并后的完整配置）"""
+    config = load_instance_config(instance_id)
+    if not config:
+        raise HTTPException(status_code=404, detail=f"Config for '{instance_id}' not found")
+
+    # 读取实例特定配置文件（覆盖项）
+    instance_file = INSTANCES_DIR / f"{instance_id}.json"
+    instance_overrides = {}
+    if instance_file.exists():
+        try:
+            with open(instance_file, "r", encoding="utf-8") as f:
+                instance_overrides = json.load(f)
+        except Exception:
+            pass
+
+    return {
+        "merged_config": config,
+        "instance_overrides": instance_overrides,
+    }
+
+
+@router.put("/api/instances/{instance_id}/config")
+async def update_instance_config(instance_id: str, req: InstanceConfigUpdate):
+    """保存实例配置并自动重启"""
+    instance_file = INSTANCES_DIR / f"{instance_id}.json"
+
+    # 读取现有配置
+    existing = {}
+    if instance_file.exists():
+        try:
+            with open(instance_file, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        except Exception:
+            pass
+
+    # 更新配置（只更新非 None 字段）
+    update_data = req.model_dump(exclude_none=True)
+    for key, value in update_data.items():
+        existing[key] = value
+
+    # 保存
+    INSTANCES_DIR.mkdir(exist_ok=True)
+    with open(instance_file, "w", encoding="utf-8") as f:
+        json.dump(existing, f, indent=2, ensure_ascii=False)
+
+    # 如果实例正在运行，自动重启
+    inst = _agent_manager.get_instance(instance_id)
+    restarted = False
+    if inst:
+        try:
+            await inst.restart()
+            restarted = True
+        except Exception as e:
+            print(f"[API] 重启实例失败: {e}")
+
+    return {
+        "status": "saved",
+        "restarted": restarted,
+        "config": existing,
+    }
+
+
+@router.post("/api/instances")
+async def create_instance(req: CreateInstanceRequest):
+    """创建新实例配置"""
+    # 检查是否已存在
+    instance_file = INSTANCES_DIR / f"{req.instance_id}.json"
+    if instance_file.exists():
+        raise HTTPException(status_code=400, detail=f"Instance '{req.instance_id}' already exists")
+
+    # 验证 instance_id 格式
+    if not req.instance_id or "/" in req.instance_id or "\\" in req.instance_id:
+        raise HTTPException(status_code=400, detail="Invalid instance_id")
+
+    # 创建配置
+    config = {
+        "model": req.model,
+        "permission_mode": req.permission_mode,
+        "mcp_enabled": req.mcp_enabled,
+        "mcp_servers_disabled": req.mcp_servers_disabled,
+        "allowed_tools": req.allowed_tools,
+    }
+    if req.system_prompt:
+        config["system_prompt"] = req.system_prompt
+
+    INSTANCES_DIR.mkdir(exist_ok=True)
+    with open(instance_file, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+
+    return {
+        "status": "created",
+        "instance_id": req.instance_id,
+        "config": config,
+    }
+
+
+@router.delete("/api/instances/{instance_id}")
+async def delete_instance(instance_id: str):
+    """删除实例配置"""
+    # 不允许删除默认配置
+    if instance_id == "_default":
+        raise HTTPException(status_code=400, detail="Cannot delete default config")
+
+    instance_file = INSTANCES_DIR / f"{instance_id}.json"
+    if not instance_file.exists():
+        raise HTTPException(status_code=404, detail=f"Instance '{instance_id}' not found")
+
+    # 如果实例正在运行，先停止
+    inst = _agent_manager.get_instance(instance_id)
+    if inst:
+        try:
+            await inst.stop()
+            _agent_manager._instances.pop(instance_id, None)
+        except Exception as e:
+            print(f"[API] 停止实例失败: {e}")
+
+    # 删除配置文件
+    instance_file.unlink()
+
+    # 清理 manager 中的配置缓存
+    _agent_manager._instance_configs.pop(instance_id, None)
+
+    return {"status": "deleted", "instance_id": instance_id}
+
+
+@router.get("/api/mcp-servers")
+async def list_mcp_servers():
+    """获取所有可用的 MCP 服务器列表（项目级 + 用户级）"""
+    from pathlib import Path
+    servers = []
+
+    # 1. 项目级 .mcp.json
+    project_mcp_file = PROJECT_ROOT / ".mcp.json"
+    if project_mcp_file.exists():
+        try:
+            with open(project_mcp_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                mcp_servers = data.get("mcpServers", {})
+                for name, info in mcp_servers.items():
+                    servers.append({
+                        "name": name,
+                        "type": info.get("type", "http" if "url" in info else "stdio"),
+                        "url": info.get("url", ""),
+                        "source": "project",
+                    })
+        except Exception as e:
+            print(f"[API] 加载项目级 MCP 配置失败: {e}")
+
+    # 2. 用户级 ~/.claude/mcp_servers.json
+    user_mcp_file = Path.home() / ".claude" / "mcp_servers.json"
+    if user_mcp_file.exists():
+        try:
+            with open(user_mcp_file, "r", encoding="utf-8") as f:
+                mcp_servers = json.load(f)
+                for name, info in mcp_servers.items():
+                    # 避免重复（项目级优先）
+                    if not any(s["name"] == name for s in servers):
+                        servers.append({
+                            "name": name,
+                            "type": info.get("type", "stdio"),
+                            "command": info.get("command", ""),
+                            "source": "user",
+                        })
+        except Exception as e:
+            print(f"[API] 加载用户级 MCP 配置失败: {e}")
+
+    return servers
+
+
+@router.get("/api/available-tools")
+async def list_available_tools():
+    """获取所有可用工具列表"""
+    return AVAILABLE_TOOLS

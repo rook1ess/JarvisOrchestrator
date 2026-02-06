@@ -44,6 +44,41 @@ class AgentInstance:
     def set_agent_manager(self, am: "AgentManager"):
         self._agent_manager = am
 
+    def _filter_mcp_servers(self, mcp_config, only_list, disabled_list):
+        """过滤 MCP 服务器：支持白名单和黑名单"""
+        import json
+        from server.config import PROJECT_ROOT
+
+        # 如果是文件路径，加载内容
+        if isinstance(mcp_config, str):
+            config_path = PROJECT_ROOT / mcp_config
+            if not config_path.exists():
+                print(f"[Instance:{self.instance_id}] MCP 配置文件不存在: {mcp_config}")
+                return None
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    servers = data.get("mcpServers", {})
+            except Exception as e:
+                print(f"[Instance:{self.instance_id}] MCP 配置加载失败: {e}")
+                return None
+        elif isinstance(mcp_config, dict):
+            servers = mcp_config
+        else:
+            return mcp_config
+
+        # 应用白名单
+        if only_list:
+            servers = {k: v for k, v in servers.items() if k in only_list}
+            print(f"[Instance:{self.instance_id}] MCP 白名单过滤: {list(servers.keys())}")
+
+        # 应用黑名单
+        if disabled_list:
+            servers = {k: v for k, v in servers.items() if k not in disabled_list}
+            print(f"[Instance:{self.instance_id}] MCP 黑名单过滤后: {list(servers.keys())}")
+
+        return servers if servers else None
+
     async def start(self, resume_session: str = None):
         """启动 SDK 客户端"""
         # Session 安全检查
@@ -66,6 +101,14 @@ class AgentInstance:
         if mcp_enabled:
             setting_sources = ["user", "project"]
             mcp_servers = config.get("mcp_servers")
+
+            # 支持过滤 MCP 服务器
+            mcp_only = config.get("mcp_servers_only")  # 白名单：只启用这些
+            mcp_disabled = config.get("mcp_servers_disabled", [])  # 黑名单：禁用这些
+
+            if mcp_only or mcp_disabled:
+                # 需要从文件加载并过滤
+                mcp_servers = self._filter_mcp_servers(mcp_servers, mcp_only, mcp_disabled)
         else:
             setting_sources = []
             mcp_servers = None
@@ -75,7 +118,7 @@ class AgentInstance:
             allowed_tools=config.get("allowed_tools", []),
             agents=subagents if subagents else None,
             mcp_servers=mcp_servers,
-            permission_mode="acceptEdits",
+            permission_mode=config.get("permission_mode", "bypassPermissions"),
             model=config.get("model", "opus"),
             setting_sources=setting_sources,
             resume=resume_session,

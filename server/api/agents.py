@@ -1,8 +1,8 @@
-"""Instance 配置 + 工具/子代理 API"""
+"""工具/子代理 API（实例配置相关路由已移至 instances.py）"""
 
 import json
 from fastapi import APIRouter, HTTPException, Query
-from server.config import INSTANCES_DIR, AVAILABLE_TOOLS, load_instance_config, load_subagents, get_mcp_servers_from_config
+from server.config import INSTANCES_DIR, AVAILABLE_TOOLS, load_subagents
 
 router = APIRouter()
 
@@ -25,38 +25,14 @@ async def list_instance_configs():
     return configs
 
 
-@router.get("/api/instances/{instance_id}/config")
-async def get_instance_config(instance_id: str):
-    """获取实例的合并后配置（_default + 实例特定）"""
-    config = load_instance_config(instance_id)
-    if not config:
-        raise HTTPException(status_code=404, detail="Instance config not found")
-    return config
-
-
-@router.put("/api/instances/{instance_id}/config")
-async def update_instance_config(instance_id: str, config: dict):
-    """更新实例特定配置（只保存与默认不同的部分）"""
-    file_path = INSTANCES_DIR / f"{instance_id}.json"
-    INSTANCES_DIR.mkdir(parents=True, exist_ok=True)
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
-    return {"status": "ok", "instance_id": instance_id}
-
-
-@router.get("/api/tools")
-async def get_tools():
-    """列出所有可用工具"""
-    return AVAILABLE_TOOLS
+# 注意：以下路由已移至 instances.py，这里保留注释供参考
+# - GET /api/instances/{instance_id}/config  -> instances.py
+# - PUT /api/instances/{instance_id}/config  -> instances.py
+# - GET /api/available-tools                 -> instances.py
+# - GET /api/mcp-servers                     -> instances.py
 
 
 @router.get("/api/subagents")
 async def get_subagents():
     """列出所有子代理"""
     return load_subagents()
-
-
-@router.get("/api/mcp-servers")
-async def get_mcp_servers(config_path: str = Query(default=".mcp.json")):
-    """列出 MCP servers 配置"""
-    return get_mcp_servers_from_config(config_path)
