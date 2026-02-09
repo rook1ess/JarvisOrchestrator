@@ -101,6 +101,24 @@ class AgentManager:
     def get_all_instances(self) -> Dict[str, AgentInstance]:
         return dict(self._instances)
 
+    def get_instance_config(self, instance_id: str) -> dict:
+        """获取实例的运行时配置（如 last_session_id）"""
+        return self._instance_configs.get(instance_id, {})
+
+    def get_all_instance_configs(self) -> Dict[str, dict]:
+        """获取所有实例的运行时配置"""
+        return dict(self._instance_configs)
+
+    def update_instance_config(self, instance_id: str, key: str, value):
+        """更新实例运行时配置的某个字段"""
+        self._instance_configs.setdefault(instance_id, {})[key] = value
+
+    def clear_instance_config_key(self, instance_id: str, key: str):
+        """清除实例运行时配置的某个字段"""
+        config = self._instance_configs.get(instance_id)
+        if config:
+            config.pop(key, None)
+
     # ---- 健康检查 ----
 
     def check_instance_health(self, instance_id: str) -> dict:

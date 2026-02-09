@@ -13,7 +13,7 @@ from server.channels.websocket import WebSocketChannel
 from server.channels.qq import QQChannel
 from server.router import MessageRouter
 
-from server.api import pages, agents, sessions, tasks, status, instances
+from server.api import pages, sessions, tasks, status, instances
 from server.mcp_server import mcp as mcp_server, init as mcp_init, _browser_manager
 
 # 预先创建 MCP streamable HTTP app（触发 session_manager 的 lazy init）
@@ -80,7 +80,6 @@ instances.init(agent_manager, ws_channel)
 mcp_init(agent_manager, ws_channel, task_manager)
 
 app.include_router(pages.router)
-app.include_router(agents.router)
 app.include_router(sessions.router)
 app.include_router(tasks.router)
 app.include_router(status.router)

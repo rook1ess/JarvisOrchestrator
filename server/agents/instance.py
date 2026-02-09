@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from server.agents.manager import AgentManager
 
+_UNSET = object()  # 哨兵值：区分"未传参"和"显式传 None"
+
 
 class AgentInstance:
     """封装单个 Claude SDK 客户端实例"""
@@ -153,9 +155,16 @@ class AgentInstance:
         await session_registry.release(self.current_session_id, self.instance_id)
         print(f"[Agent:{self.instance_id}] 已停止")
 
-    async def restart(self, resume_session: str = None):
-        """重启实例，重新加载配置。默认保留当前 session。"""
-        session_to_resume = resume_session if resume_session else self.current_session_id
+    async def restart(self, resume_session=_UNSET):
+        """重启实例，重新加载配置。
+        - 不传参：保留当前 session
+        - 传 None：创建全新 session
+        - 传 session_id：恢复指定 session
+        """
+        if resume_session is _UNSET:
+            session_to_resume = self.current_session_id
+        else:
+            session_to_resume = resume_session
         await self.stop()
         await self.start(session_to_resume)
 

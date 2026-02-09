@@ -10,8 +10,6 @@ router = APIRouter()
 _agent_manager = None
 _ws_channel = None
 
-DEFAULT_INSTANCE = "ws-default"
-
 
 def init(agent_manager, ws_channel):
     global _agent_manager, _ws_channel
@@ -19,11 +17,23 @@ def init(agent_manager, ws_channel):
     _ws_channel = ws_channel
 
 
+def _resolve_instance_id(instance_id: str = None) -> str:
+    """解析实例 ID，默认 ws-default"""
+    return instance_id or "ws-default"
+
+
 @router.get("/api/claude-sessions")
-async def get_claude_sessions():
+async def get_claude_sessions(instance_id: str = None):
+    target = _resolve_instance_id(instance_id)
     sessions = load_claude_sessions()
-    instance = _agent_manager.get_instance(DEFAULT_INSTANCE) if _agent_manager else None
+    instance = _agent_manager.get_instance(target) if _agent_manager else None
     current_session = instance.current_session_id if instance else None
+
+    # 实例未创建时，从保存的配置中获取 pending session
+    pending_session = None
+    if not current_session and _agent_manager:
+        config = _agent_manager.get_instance_config(target)
+        pending_session = config.get("last_session_id")
 
     result = []
     for s in sessions:
@@ -34,37 +44,45 @@ async def get_claude_sessions():
             "created": s.get("created"),
             "modified": s.get("modified"),
         })
-    return {"sessions": result, "current_session": current_session}
+    return {
+        "sessions": result,
+        "current_session": current_session or pending_session,
+    }
 
 
 @router.post("/api/claude-sessions/new")
-async def create_new_claude_session():
-    instance = _agent_manager.get_instance(DEFAULT_INSTANCE)
+async def create_new_claude_session(instance_id: str = None):
+    target = _resolve_instance_id(instance_id)
+    instance = _agent_manager.get_instance(target)
     if instance:
-        await instance.restart(resume_session=None)
+        await instance.restart(resume_session=None)  # 显式 None → 新 session
+    # 清除保存的 last_session_id，防止实例被回收后重建时恢复旧 session
+    if _agent_manager:
+        _agent_manager.clear_instance_config_key(target, "last_session_id")
     if _ws_channel:
         await _ws_channel.send_response(
             {"type": "session_changed", "session_id": None, "is_new": True},
-            {"instance_id": DEFAULT_INSTANCE}
+            {"instance_id": target}
         )
     return {"status": "ok", "message": "新会话已创建"}
 
 
 @router.put("/api/claude-sessions/{session_id}/activate")
-async def activate_claude_session(session_id: str):
+async def activate_claude_session(session_id: str, instance_id: str = None):
+    target = _resolve_instance_id(instance_id)
     sessions = load_claude_sessions()
     session = next((s for s in sessions if s.get("sessionId") == session_id), None)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    instance = _agent_manager.get_instance(DEFAULT_INSTANCE)
+    instance = _agent_manager.get_instance(target)
     if instance:
         await instance.restart(resume_session=session_id)
 
     if _ws_channel:
         await _ws_channel.send_response(
             {"type": "session_changed", "session_id": session_id, "title": get_session_title(session)},
-            {"instance_id": DEFAULT_INSTANCE}
+            {"instance_id": target}
         )
 
     return {
@@ -125,8 +143,10 @@ async def delete_claude_session(session_id: str):
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to delete session file: {e}")
 
-    instance = _agent_manager.get_instance(DEFAULT_INSTANCE) if _agent_manager else None
-    if instance and instance.current_session_id == session_id:
-        instance.current_session_id = None
+    # 检查所有实例，清除引用该 session 的实例
+    if _agent_manager:
+        for iid, inst in _agent_manager.get_all_instances().items():
+            if inst.current_session_id == session_id:
+                inst.current_session_id = None
 
     return {"status": "deleted", "session_id": session_id}

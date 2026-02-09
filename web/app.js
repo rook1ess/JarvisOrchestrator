@@ -1,6 +1,6 @@
 /**
  * Claude Agent Chat - Frontend Application (WebSocket Version)
- * 支持多 Agent 切换、图片上传、打字机效果、消息编辑、虚拟滚动
+ * 支持多实例、图片上传、打字机效果、消息编辑、虚拟滚动
  * Round 5: Typewriter effect, Message editing, Enhanced drag & drop, i18n, Virtual scrolling
  */
 
@@ -10,8 +10,6 @@
     // ============================================
     // Configuration
     // ============================================
-    let currentAgent = 'default';
-
     // 从 URL 参数获取 instance，默认 ws-default
     function getCurrentInstance() {
         const params = new URLSearchParams(window.location.search);
@@ -19,7 +17,7 @@
     }
     let currentInstance = getCurrentInstance();
 
-    // 按实例分离存储 key
+    // 按实例分离存储 key（仅用于清理旧数据）
     function getStorageKey() {
         return `jarvis_chat_history_${currentInstance}`;
     }
@@ -51,98 +49,66 @@
     }
 
     // ============================================
-    // LocalStorage Functions (按实例分离)
+    // Session Message Loading (服务端为唯一 truth)
     // ============================================
-    function saveMessagesToStorage() {
-        try {
-            const data = {
-                messages: state.messages,
-                agent: currentAgent,
-                timestamp: Date.now()
-            };
-            localStorage.setItem(getStorageKey(), JSON.stringify(data));
-        } catch (e) {
-            console.warn('Failed to save messages to localStorage:', e);
-        }
-    }
-
-    function loadMessagesFromStorage() {
-        try {
-            const data = localStorage.getItem(getStorageKey());
-            if (data) {
-                return JSON.parse(data);
-            }
-        } catch (e) {
-            console.warn('Failed to load messages from localStorage:', e);
-        }
-        return null;
-    }
-
     function clearStorage() {
         localStorage.removeItem(getStorageKey());
         localStorage.removeItem(getSessionKey());
     }
 
-    function checkServerSession(serverSessionId) {
-        const storedSessionId = localStorage.getItem(getSessionKey());
-        if (storedSessionId && storedSessionId !== serverSessionId) {
-            // 服务器重启了，清空历史
-            console.log('Server restarted, clearing chat history');
-            clearStorage();
-            return true; // 表示需要清空
-        }
-        // 保存新的 session id
-        localStorage.setItem(getSessionKey(), serverSessionId);
-        return false;
-    }
+    async function loadCurrentSessionMessages() {
+        /**
+         * 从服务端加载当前 session 的消息历史并显示。
+         * 返回 true 表示加载了消息，false 表示无消息（显示 welcome）。
+         */
+        try {
+            const response = await fetch('/api/claude-sessions');
+            const data = await response.json();
 
-    function restoreMessagesFromStorage() {
-        const data = loadMessagesFromStorage();
-        if (!data || !data.messages || data.messages.length === 0) {
-            return;
-        }
-
-        // 隐藏欢迎消息
-        if (elements.welcomeMessage) {
-            elements.welcomeMessage.classList.add('hidden');
-        }
-
-        // 恢复消息显示
-        data.messages.forEach(msg => {
-            const messageEl = createMessageElement(msg.type, msg.content);
-            const contentEl = messageEl.querySelector('.message-content');
-
-            // 恢复附件显示
-            if (msg.type === 'user' && msg.attachments && msg.attachments.length > 0) {
-                const images = msg.attachments.filter(att => att.type === 'image');
-                const files = msg.attachments.filter(att => att.type !== 'image');
-
-                if (images.length > 0) {
-                    const imagesHtml = images.map(att =>
-                        `<img src="${att.preview}" class="message-image" alt="Attached image">`
-                    ).join('');
-                    contentEl.insertAdjacentHTML('afterbegin', `<div class="message-images">${imagesHtml}</div>`);
-                }
-
-                if (files.length > 0) {
-                    const filesHtml = files.map(att => {
-                        const iconSvg = getFileIconSvg(att.iconType || 'document');
-                        return `<div class="message-file">
-                            <span class="file-icon">${iconSvg}</span>
-                            <span>${escapeHtml(att.name)}</span>
-                            ${att.size ? `<span style="color: var(--text-muted);">(${att.size})</span>` : ''}
-                        </div>`;
-                    }).join('');
-                    contentEl.insertAdjacentHTML('afterbegin', `<div class="message-files">${filesHtml}</div>`);
-                }
+            if (data.sessions) {
+                renderClaudeSessions(data.sessions);
             }
 
-            elements.messagesWrapper.appendChild(messageEl);
-        });
+            const sessionId = data.current_session;
+            if (!sessionId) {
+                showWelcomeMessage();
+                return false;
+            }
 
-        state.messages = data.messages;
-        scrollToBottom();
-        console.log(`Restored ${data.messages.length} messages from storage`);
+            currentClaudeSessionId = sessionId;
+
+            // 加载该 session 的消息
+            const msgResponse = await fetch(`/api/claude-sessions/${sessionId}/messages`);
+            const msgData = await msgResponse.json();
+
+            if (!msgData.messages || msgData.messages.length === 0) {
+                showWelcomeMessage();
+                return false;
+            }
+
+            // 隐藏欢迎消息
+            if (elements.welcomeMessage) {
+                elements.welcomeMessage.classList.add('hidden');
+            }
+
+            elements.messagesWrapper.innerHTML = '';
+            state.messages = [];
+
+            msgData.messages.forEach(msg => {
+                const type = msg.role === 'user' ? 'user' : 'assistant';
+                const messageEl = createMessageElement(type, msg.content);
+                elements.messagesWrapper.appendChild(messageEl);
+                state.messages.push({ type, content: msg.content });
+            });
+
+            scrollToBottom();
+            console.log(`Loaded ${msgData.messages.length} messages from server (session: ${sessionId.slice(0, 8)}...)`);
+            return true;
+        } catch (error) {
+            console.error('Failed to load current session messages:', error);
+            showWelcomeMessage();
+            return false;
+        }
     }
 
     // ============================================
@@ -155,13 +121,10 @@
         messageInput: document.getElementById('messageInput'),
         sendBtn: document.getElementById('sendBtn'),
         newChatBtn: document.getElementById('newChatBtn'),
-        agentStatus: document.getElementById('agentStatus'),
         inputContainer: document.querySelector('.input-container'),
-        agentSelector: document.getElementById('agentSelector'),
         attachBtn: document.getElementById('attachBtn'),
         fileInput: document.getElementById('fileInput'),
         attachmentPreview: document.getElementById('attachmentPreview'),
-        chatList: document.getElementById('chatList'),
         sessionsList: document.getElementById('sessionsList'),
         taskBar: document.getElementById('taskBar'),
         taskItems: document.getElementById('taskItems'),
@@ -534,27 +497,14 @@
     }
 
     function setStatus(status, text) {
-        const statusDot = elements.agentStatus.querySelector('.status-dot');
-        const statusText = elements.agentStatus.querySelector('span:last-child');
-
-        statusDot.className = 'status-dot';
-        if (status === 'busy') statusDot.classList.add('busy');
-        if (status === 'error') statusDot.classList.add('error');
-
-        statusText.textContent = text;
-
-        // Also update role indicator status
+        // Update role indicator status
         if (elements.roleStatus) {
             elements.roleStatus.className = 'role-status';
             if (status === 'busy') elements.roleStatus.classList.add('busy');
             if (status === 'error') elements.roleStatus.classList.add('error');
         }
-    }
-
-    function updateRoleName(agentId) {
         if (elements.roleName) {
-            const agentName = agentNameMap[agentId] || agentId;
-            elements.roleName.textContent = agentName;
+            elements.roleName.textContent = text;
         }
     }
 
@@ -565,79 +515,7 @@
     }
 
     // ============================================
-    // Agent Management
-    // ============================================
-    async function loadAgents() {
-        try {
-            const response = await fetch('/api/agents');
-            const agents = await response.json();
-
-            // 填充 agentNameMap 供会话列表使用
-            agents.forEach(a => agentNameMap[a.id] = a.name);
-
-            elements.agentSelector.innerHTML = agents.map(a =>
-                `<option value="${a.id}">${a.name}</option>`
-            ).join('');
-
-            // Set to current agent or default
-            if (agents.find(a => a.id === currentAgent)) {
-                elements.agentSelector.value = currentAgent;
-            } else if (agents.length > 0) {
-                currentAgent = agents[0].id;
-                elements.agentSelector.value = currentAgent;
-            }
-
-            // Update role indicator
-            updateRoleName(currentAgent);
-        } catch (error) {
-            console.error('Failed to load agents:', error);
-        }
-    }
-
-    async function handleAgentChange() {
-        const newAgent = elements.agentSelector.value;
-        if (newAgent !== currentAgent) {
-            currentAgent = newAgent;
-            setStatus('busy', 'Switching agent...');
-            updateRoleName(newAgent);
-
-            // 调用 API 重启小克（切换 agent 配置）
-            try {
-                await fetch(`/api/restart?agent_id=${newAgent}`, { method: 'POST' });
-            } catch (e) {
-                console.error('Failed to restart agent:', e);
-            }
-
-            clearSession();
-        }
-    }
-
-    // ============================================
-    // Session Management
-    // ============================================
-    let currentSessionId = null;
-    let agentNameMap = {}; // agent id -> name
-    let sessionToRename = null;
-    let sessionToDelete = null;
-
-    // Modal elements
-    const renameModal = document.getElementById('renameModal');
-    const deleteModal = document.getElementById('deleteModal');
-    const sessionNameInput = document.getElementById('sessionNameInput');
-    const deleteConfirmText = document.getElementById('deleteConfirmText');
-
-    async function loadSessions() {
-        try {
-            const response = await fetch('/api/sessions');
-            const sessions = await response.json();
-            renderSessionList(sessions);
-        } catch (error) {
-            console.error('Failed to load sessions:', error);
-        }
-    }
-
-    // ============================================
-    // Claude Sessions Management (Claude Agent SDK native)
+    // Claude Sessions Management
     // ============================================
     let currentClaudeSessionId = null;
 
@@ -700,6 +578,7 @@
 
         try {
             setStatus('busy', 'Switching session...');
+            _sessionChangeInitiatedLocally = true;
 
             // 调用后端 API 切换 session
             const response = await fetch(`/api/claude-sessions/${sessionId}/activate`, {
@@ -707,6 +586,7 @@
             });
 
             if (!response.ok) {
+                _sessionChangeInitiatedLocally = false;
                 throw new Error('Failed to switch session');
             }
 
@@ -792,9 +672,12 @@
         }
     };
 
+    let _sessionChangeInitiatedLocally = false;
+
     async function createNewClaudeSession() {
         try {
             setStatus('busy', 'Creating new session...');
+            _sessionChangeInitiatedLocally = true;
 
             // 调用后端 API 创建新 session
             const response = await fetch('/api/claude-sessions/new', {
@@ -802,6 +685,7 @@
             });
 
             if (!response.ok) {
+                _sessionChangeInitiatedLocally = false;
                 throw new Error('Failed to create new session');
             }
 
@@ -811,6 +695,7 @@
             // 清空 UI
             elements.messagesWrapper.innerHTML = '';
             state.messages = [];
+            clearStorage();
             showWelcomeMessage();
 
             // 清空附件
@@ -844,65 +729,6 @@
         elements.welcomeMessage = document.getElementById('welcomeMessage');
     }
 
-    function renderSessionList(sessions) {
-        if (!elements.chatList) return;
-
-        if (!sessions || sessions.length === 0) {
-            elements.chatList.innerHTML = '<div class="chat-list-empty">// No sessions yet</div>';
-            return;
-        }
-
-        // 按 Agent 分组
-        const grouped = {};
-        sessions.forEach(s => {
-            const agent = s.agent_id || 'default';
-            if (!grouped[agent]) grouped[agent] = [];
-            grouped[agent].push(s);
-        });
-
-        let html = '';
-        for (const [agentId, agentSessions] of Object.entries(grouped)) {
-            const agentName = agentNameMap[agentId] || agentId;
-            html += `
-                <div class="chat-group">
-                    <div class="chat-group-header">
-                        <span>${escapeHtml(agentName)}</span>
-                        <span class="count">(${agentSessions.length})</span>
-                    </div>
-                    ${agentSessions.map(s => `
-                        <div class="chat-item ${s.id === currentSessionId ? 'active' : ''}"
-                             data-session-id="${s.id}">
-                            <div class="chat-item-content" onclick="window.switchSession('${s.id}')">
-                                <div class="chat-item-info">
-                                    <span class="chat-item-title">${escapeHtml(s.name || 'New Session')}</span>
-                                    <div class="chat-item-meta">
-                                        <span>${formatTime(s.updated_at || s.created_at)}</span>
-                                        ${s.message_count ? `<span>${s.message_count} msgs</span>` : ''}
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="chat-item-actions">
-                                <button class="chat-item-action" onclick="event.stopPropagation(); window.openRenameModal('${s.id}', '${escapeHtml(s.name || '')}')" title="Rename">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                                    </svg>
-                                </button>
-                                <button class="chat-item-action delete" onclick="event.stopPropagation(); window.openDeleteModal('${s.id}', '${escapeHtml(s.name || 'this session')}')" title="Delete">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <polyline points="3 6 5 6 21 6"/>
-                                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-                                    </svg>
-                                </button>
-                            </div>
-                        </div>
-                    `).join('')}
-                </div>
-            `;
-        }
-        elements.chatList.innerHTML = html;
-    }
-
     function formatTime(timestamp) {
         if (!timestamp) return '';
         // Handle both ISO string and Unix timestamp
@@ -921,58 +747,6 @@
             return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
         }
     }
-
-    window.switchSession = async function (sessionId) {
-        if (sessionId === currentSessionId) return;
-
-        try {
-            setStatus('busy', 'Switching session...');
-            // Load the session's messages
-            const response = await fetch(`/api/sessions/${sessionId}`);
-            const session = await response.json();
-
-            currentSessionId = sessionId;
-
-            // Clear current UI
-            elements.messagesWrapper.innerHTML = '';
-            state.messages = [];
-
-            // Restore session messages
-            if (session.messages && session.messages.length > 0) {
-                if (elements.welcomeMessage) {
-                    elements.welcomeMessage.classList.add('hidden');
-                }
-
-                session.messages.forEach(msg => {
-                    const messageEl = createMessageElement(msg.role === 'user' ? 'user' : 'assistant', msg.content);
-                    elements.messagesWrapper.appendChild(messageEl);
-                    state.messages.push({ type: msg.role === 'user' ? 'user' : 'assistant', content: msg.content });
-                });
-                scrollToBottom();
-            } else {
-                // Show welcome message for empty session
-                elements.messagesWrapper.innerHTML = `
-                    <div class="welcome-message" id="welcomeMessage">
-                        <div class="welcome-icon">
-                            <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
-                                <path d="M12 2L2 7L12 12L22 7L12 2Z"/>
-                                <path d="M2 17L12 22L22 17"/>
-                                <path d="M2 12L12 17L22 12"/>
-                            </svg>
-                        </div>
-                        <h2>System Ready</h2>
-                        <p>// Initialize connection with Agent</p>
-                    </div>
-                `;
-            }
-
-            await loadSessions();
-            setStatus('ready', 'Ready');
-        } catch (error) {
-            console.error('Failed to switch session:', error);
-            setStatus('error', 'Switch failed');
-        }
-    };
 
     function clearConversation() {
         // Clear UI
@@ -1011,106 +785,16 @@
         await createNewClaudeSession();
     }
 
-    // Rename modal functions
-    window.openRenameModal = function(sessionId, currentName) {
-        sessionToRename = sessionId;
-        sessionNameInput.value = currentName;
-        renameModal.classList.add('active');
-        sessionNameInput.focus();
-    };
-
-    function closeRenameModal() {
-        renameModal.classList.remove('active');
-        sessionToRename = null;
-    }
-
-    async function confirmRename() {
-        if (!sessionToRename) return;
-
-        const newName = sessionNameInput.value.trim();
-        if (!newName) {
-            showToast('Error', 'Session name cannot be empty', 'error');
-            return;
-        }
-
-        try {
-            await fetch(`/api/sessions/${sessionToRename}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: newName })
-            });
-
-            // Update tab name if exists
-            if (window.updateTabName) {
-                window.updateTabName(sessionToRename, newName);
-            }
-
-            closeRenameModal();
-            await loadSessions();
-            showToast('Renamed', 'Session renamed successfully', 'success', 2000);
-        } catch (error) {
-            console.error('Failed to rename session:', error);
-            showToast('Error', 'Failed to rename session', 'error');
-        }
-    }
-
-    // Delete modal functions
-    window.openDeleteModal = function(sessionId, sessionName) {
-        sessionToDelete = sessionId;
-        deleteConfirmText.textContent = `Are you sure you want to delete "${sessionName}"? This cannot be undone.`;
-        deleteModal.classList.add('active');
-    };
-
-    function closeDeleteModal() {
-        deleteModal.classList.remove('active');
-        sessionToDelete = null;
-    }
-
-    async function confirmDelete() {
-        if (!sessionToDelete) return;
-
-        try {
-            await fetch(`/api/sessions/${sessionToDelete}`, { method: 'DELETE' });
-
-            // If we deleted the current session, create a new one
-            if (sessionToDelete === currentSessionId) {
-                currentSessionId = null;
-                await createNewSession();
-            }
-
-            closeDeleteModal();
-            await loadSessions();
-            showToast('Deleted', 'Session deleted successfully', 'success', 2000);
-        } catch (error) {
-            console.error('Failed to delete session:', error);
-            showToast('Error', 'Failed to delete session', 'error');
-        }
-    }
-
-    // Initialize modal event listeners
+    // Initialize modal event listeners (legacy rename/delete modals removed)
     function initModals() {
-        // Rename modal
-        document.getElementById('closeRenameModalBtn')?.addEventListener('click', closeRenameModal);
-        document.getElementById('cancelRenameBtn')?.addEventListener('click', closeRenameModal);
-        document.getElementById('confirmRenameBtn')?.addEventListener('click', confirmRename);
-        renameModal?.querySelector('.modal-backdrop')?.addEventListener('click', closeRenameModal);
-        sessionNameInput?.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') confirmRename();
-            if (e.key === 'Escape') closeRenameModal();
-        });
-
-        // Delete modal
-        document.getElementById('closeDeleteModalBtn')?.addEventListener('click', closeDeleteModal);
-        document.getElementById('cancelDeleteBtn')?.addEventListener('click', closeDeleteModal);
-        document.getElementById('confirmDeleteBtn')?.addEventListener('click', confirmDelete);
-        deleteModal?.querySelector('.modal-backdrop')?.addEventListener('click', closeDeleteModal);
+        // Modals are now handled by Claude Sessions system (deleteClaudeSession, etc.)
     }
 
     // ============================================
     // Session Tabs Management
     // ============================================
     const TABS_STORAGE_KEY = 'jarvis_session_tabs';
-    let openTabs = []; // Array of { sessionId, name, agent }
+    let openTabs = []; // Array of { sessionId, name }
     let activeTabId = null;
 
     const sessionTabsContainer = document.getElementById('sessionTabsContainer');
@@ -1140,16 +824,15 @@
         // Load saved tabs
         openTabs = loadTabsFromStorage();
 
-        // If no tabs but we have a current session, add it as a tab
-        if (openTabs.length === 0 && currentSessionId) {
+        // If no tabs but we have a current Claude session, add it as a tab
+        if (openTabs.length === 0 && currentClaudeSessionId) {
             openTabs.push({
-                sessionId: currentSessionId,
-                name: 'New Session',
-                agent: currentAgent
+                sessionId: currentClaudeSessionId,
+                name: 'New Session'
             });
         }
 
-        activeTabId = currentSessionId;
+        activeTabId = currentClaudeSessionId;
         renderSessionTabs();
 
         // Add tab button event
@@ -1226,75 +909,23 @@
                 reorderTabs(fromSessionId, toSessionId);
             });
 
-            // Double-click to rename
-            tab.addEventListener('dblclick', (e) => {
-                if (!e.target.closest('.session-tab-close')) {
-                    const tabData = openTabs.find(t => t.sessionId === sessionId);
-                    if (tabData) {
-                        window.openRenameModal(sessionId, tabData.name || '');
-                    }
-                }
-            });
+            // Double-click to rename (no-op, rename modal removed)
+
         });
     }
 
     async function switchToTab(sessionId) {
         if (sessionId === activeTabId) return;
 
-        // Use existing switchSession function
-        await window.switchSession(sessionId);
+        // Use Claude Sessions system
+        await window.switchClaudeSession(sessionId);
         activeTabId = sessionId;
         renderSessionTabs();
     }
 
     async function addNewTab() {
-        try {
-            setStatus('busy', 'Creating tab...');
-            const response = await fetch('/api/sessions', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ agent_id: currentAgent })
-            });
-            const data = await response.json();
-
-            // Add new tab
-            openTabs.push({
-                sessionId: data.id,
-                name: 'New Session',
-                agent: currentAgent
-            });
-            saveTabsToStorage();
-
-            // Switch to new tab
-            await switchToTab(data.id);
-
-            // Clear UI for new session
-            elements.messagesWrapper.innerHTML = '';
-            state.messages = [];
-
-            // Show welcome message
-            elements.messagesWrapper.innerHTML = `
-                <div class="welcome-message" id="welcomeMessage">
-                    <div class="welcome-icon">
-                        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
-                            <path d="M12 2L2 7L12 12L22 7L12 2Z"/>
-                            <path d="M2 17L12 22L22 17"/>
-                            <path d="M2 12L12 17L22 12"/>
-                        </svg>
-                    </div>
-                    <h2>System Ready</h2>
-                    <p>// Initialize connection with Agent</p>
-                </div>
-            `;
-
-            currentSessionId = data.id;
-            await loadSessions();
-            setStatus('ready', 'Ready');
-
-        } catch (error) {
-            console.error('Failed to add new tab:', error);
-            setStatus('error', 'Failed');
-        }
+        // Delegate to Claude Sessions system to create a new session
+        await createNewClaudeSession();
     }
 
     function closeTab(sessionId) {
@@ -1345,9 +976,9 @@
     }
 
     // Add session to tabs if not already present
-    function ensureTabExists(sessionId, name, agent) {
+    function ensureTabExists(sessionId, name) {
         if (!openTabs.find(t => t.sessionId === sessionId)) {
-            openTabs.push({ sessionId, name: name || 'New Session', agent: agent || currentAgent });
+            openTabs.push({ sessionId, name: name || 'New Session' });
             saveTabsToStorage();
             renderSessionTabs();
         }
@@ -2157,11 +1788,6 @@
         // Enhance code blocks
         enhanceCodeBlocks();
 
-        // 用户消息立即保存
-        if (type === 'user') {
-            saveMessagesToStorage();
-        }
-
         return messageEl;
     }
 
@@ -2239,17 +1865,8 @@
         switch (data.type) {
             case 'connected':
                 setStatus('ready', 'Ready');
-                // 检查服务器是否重启，如果重启了则清空历史并重新加载页面
-                if (data.server_session_id) {
-                    const storedSessionId = localStorage.getItem(getSessionKey());
-                    if (storedSessionId && storedSessionId !== data.server_session_id) {
-                        // 服务器重启了，清空存储
-                        console.log('Server restarted, clearing storage');
-                        clearStorage();
-                    }
-                    // 保存当前 session_id
-                    localStorage.setItem(getSessionKey(), data.server_session_id);
-                }
+                // 连接成功后从服务端加载当前 session 的消息
+                loadCurrentSessionMessages();
                 break;
 
             case 'user_message':
@@ -2386,9 +2003,6 @@
                     }
                 }
 
-                // 保存到 localStorage
-                saveMessagesToStorage();
-
                 // 刷新 Claude sessions 列表（新对话会创建新 session）
                 loadClaudeSessions();
 
@@ -2428,9 +2042,6 @@
                     state.messages.push({ type: 'assistant', content: state.fullContent + '\n[Stopped]' });
                 }
 
-                // 保存到 localStorage
-                saveMessagesToStorage();
-
                 // Reset streaming state
                 state.currentMessageEl = null;
                 state.currentContentEl = null;
@@ -2464,6 +2075,29 @@
 
             case 'task_update':
                 enhancedHandleTaskUpdate(data);
+                break;
+
+            case 'session_changed':
+                // 来自后端的 session 切换通知
+                console.log('Session changed:', data);
+                if (_sessionChangeInitiatedLocally) {
+                    // 本设备发起的，UI 已处理，跳过
+                    _sessionChangeInitiatedLocally = false;
+                    break;
+                }
+                // 其他设备/API 触发了 session 切换，同步本地 UI
+                currentClaudeSessionId = data.session_id || null;
+                elements.messagesWrapper.innerHTML = '';
+                state.messages = [];
+                if (data.is_new) {
+                    showWelcomeMessage();
+                    showToast('New Chat', 'New conversation started from another device', 'info', 2000);
+                } else {
+                    showToast('Session Switched', `Switched to "${data.title || 'another session'}" from another device`, 'info', 2000);
+                    // 从服务端加载切换后 session 的消息
+                    loadCurrentSessionMessages();
+                }
+                loadClaudeSessions();
                 break;
         }
     }
@@ -2554,9 +2188,6 @@
         state.toolsContainer = null;
         state.textContainer = null;
         state.fullContent = '';
-
-        // 清空 localStorage（但保留 session_id，只清消息）
-        localStorage.removeItem(getStorageKey());
 
         // Reconnect
         setTimeout(connectWebSocket, 100);
@@ -2705,9 +2336,9 @@
         overlay.addEventListener('click', closeMenu);
 
         // Close on session switch
-        const originalSwitchSession = window.switchSession;
-        window.switchSession = async function(sessionId) {
-            await originalSwitchSession(sessionId);
+        const originalSwitchClaudeSession = window.switchClaudeSession;
+        window.switchClaudeSession = async function(sessionId) {
+            await originalSwitchClaudeSession(sessionId);
             closeMenu();
         };
     }
@@ -2747,14 +2378,6 @@
                 }
                 if (shortcutsPanel?.classList.contains('active')) {
                     hideShortcutsPanel();
-                    return;
-                }
-                if (renameModal?.classList.contains('active')) {
-                    closeRenameModal();
-                    return;
-                }
-                if (deleteModal?.classList.contains('active')) {
-                    closeDeleteModal();
                     return;
                 }
                 if (state.isLoading) {
@@ -3222,12 +2845,12 @@
 
         setTimeout(() => {
             try {
-                const agentName = agentNameMap[currentAgent] || currentAgent;
+                const instanceName = currentInstance;
                 const timestamp = new Date().toISOString().split('T')[0];
-                const filename = `chat-${agentName}-${timestamp}.md`;
+                const filename = `chat-${instanceName}-${timestamp}.md`;
 
                 let markdown = `# Chat Export\n\n`;
-                markdown += `**Agent:** ${agentName}\n`;
+                markdown += `**Instance:** ${instanceName}\n`;
                 markdown += `**Date:** ${new Date().toLocaleString()}\n`;
                 markdown += `**Messages:** ${state.messages.length}\n\n`;
                 markdown += `---\n\n`;
@@ -4165,9 +3788,6 @@
             });
         }
 
-        // Load agents
-        await loadAgents();
-
         // Initialize modals
         initModals();
 
@@ -4200,7 +3820,6 @@
         elements.messageInput.addEventListener('input', handleInput);
         elements.messageInput.addEventListener('paste', handlePaste);
         elements.newChatBtn.addEventListener('click', createNewSession);
-        elements.agentSelector.addEventListener('change', handleAgentChange);
 
         // Attachment handling
         elements.attachBtn.addEventListener('click', handleAttachClick);
@@ -4215,11 +3834,7 @@
         // Initial state
         updateButtonState();
 
-        // 加载会话列表
-        await loadSessions();
-
-        // 加载 Claude sessions 历史
-        await loadClaudeSessions();
+        // Claude sessions 列表在 WebSocket 连接后由 loadCurrentSessionMessages 加载
 
         // Initialize session tabs
         initSessionTabs();
@@ -4235,10 +3850,10 @@
             taskRefreshBtn.addEventListener('click', handleTaskRefresh);
         }
 
-        // 先恢复历史消息（如果有）
-        restoreMessagesFromStorage();
+        // 清理旧版 localStorage 消息缓存（已改为服务端加载）
+        clearStorage();
 
-        // Connect WebSocket（连接后会检查 server_session_id，如果服务器重启会清空）
+        // Connect WebSocket（连接后从服务端加载当前 session 消息）
         connectWebSocket();
 
         // Periodic task polling (every 30 seconds as fallback)

@@ -7,7 +7,7 @@ from typing import Optional, List
 
 from server.config import (
     PROJECT_ROOT, INSTANCES_DIR, AVAILABLE_TOOLS,
-    load_instance_config
+    load_instance_config, load_subagents,
 )
 
 router = APIRouter()
@@ -50,7 +50,7 @@ class CreateInstanceRequest(BaseModel):
 async def list_instances():
     """列出所有实例及状态"""
     instances = _agent_manager.get_all_instances()
-    configs = _agent_manager._instance_configs
+    configs = _agent_manager.get_all_instance_configs()
 
     result = []
     for iid, inst in instances.items():
@@ -218,7 +218,7 @@ async def delete_instance(instance_id: str):
     instance_file.unlink()
 
     # 清理 manager 中的配置缓存
-    _agent_manager._instance_configs.pop(instance_id, None)
+    _agent_manager.clear_instance_config_key(instance_id, "last_session_id")
 
     return {"status": "deleted", "instance_id": instance_id}
 
@@ -271,3 +271,27 @@ async def list_mcp_servers():
 async def list_available_tools():
     """获取所有可用工具列表"""
     return AVAILABLE_TOOLS
+
+
+@router.get("/api/instances/config")
+async def list_instance_configs():
+    """列出所有实例配置文件"""
+    configs = []
+    if INSTANCES_DIR.exists():
+        for file in INSTANCES_DIR.glob("*.json"):
+            try:
+                with open(file, "r", encoding="utf-8") as f:
+                    json.load(f)
+                configs.append({
+                    "instance_id": file.stem,
+                    "is_default": file.stem == "_default",
+                })
+            except Exception:
+                pass
+    return configs
+
+
+@router.get("/api/subagents")
+async def get_subagents():
+    """列出所有子代理"""
+    return load_subagents()

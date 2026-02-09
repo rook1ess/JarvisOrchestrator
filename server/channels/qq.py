@@ -93,4 +93,5 @@ class QQChannel(Channel):
                     group_id=ctx.get("group_id"),
                     text=reply_text
                 )
-                ctx["chunks"] = []
+            # 清理 context，防止内存泄漏
+            del self._contexts[source]

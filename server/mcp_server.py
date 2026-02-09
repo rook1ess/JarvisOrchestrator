@@ -20,10 +20,10 @@ _task_manager = None
 # 浏览器管理器单例（lazy init）
 _browser_manager = BrowserManager()
 
-# 容器配置
-CONTAINER_NAME = "claude-dev"
-HOST_PROJECTS = "/Users/huang/Projects"
-CONTAINER_WORKSPACE = "/home/claude/workspace"
+# 容器配置（可通过环境变量覆盖）
+CONTAINER_NAME = os.environ.get("JARVIS_CONTAINER_NAME", "claude-dev")
+HOST_PROJECTS = os.environ.get("JARVIS_HOST_PROJECTS", "/Users/huang/Projects")
+CONTAINER_WORKSPACE = os.environ.get("JARVIS_CONTAINER_WORKSPACE", "/home/claude/workspace")
 
 
 def init(agent_manager, ws_channel, task_manager=None):
@@ -39,7 +39,7 @@ def init(agent_manager, ws_channel, task_manager=None):
 async def jarvis_list_instances() -> list[dict]:
     """列出所有 Jarvis 实例及其状态。用于发现其他实例以便通信。"""
     instances = _agent_manager.get_all_instances()
-    configs = _agent_manager._instance_configs
+    configs = _agent_manager.get_all_instance_configs()
 
     result = []
     for iid, inst in instances.items():

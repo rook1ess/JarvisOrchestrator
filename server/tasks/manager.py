@@ -94,12 +94,14 @@ class TaskManager:
 
     def complete(self, task_id: str):
         if task_id in self.tasks:
-            self.tasks[task_id]["status"] = "done"
-            self.tasks[task_id]["progress"] = self.tasks[task_id].get("total_steps", 1) or 1
-            self._archive(self.tasks[task_id])
+            task_info = self.tasks[task_id]
+            task_info["status"] = "done"
+            task_info["progress"] = task_info.get("total_steps", 1) or 1
+            self._archive(task_info)
+            del self.tasks[task_id]
             self._save()
             print(f"[TaskManager] 任务完成: {task_id}")
-            return self.tasks[task_id]
+            return task_info
         return None
 
     async def complete_async(self, task_id: str):

@@ -34,21 +34,24 @@ class MessageRouter:
             self.routes = [{"channel": "websocket", "instance_id": "ws-default"}]
 
     def resolve(self, channel_type: str, context: dict = None) -> Optional[dict]:
-        """根据 channel + context 匹配路由，返回完整路由条目（含 instance_id + agent）"""
+        """根据 channel + context 匹配路由，返回完整路由条目（含 instance_id）
+
+        匹配逻辑：
+        1. 先精确匹配有 match 条件的路由
+        2. 无 match 条件的路由作为该 channel 的 fallback
+        """
         context = context or {}
+        fallback = None
         for route in self.routes:
             if route.get("channel") != channel_type:
                 continue
             match = route.get("match")
             if match:
-                if not all(context.get(k) == v for k, v in match.items()):
-                    continue
-            return route
-        # fallback: 第一个匹配 channel 的路由
-        for route in self.routes:
-            if route.get("channel") == channel_type:
-                return route
-        return None
+                if all(context.get(k) == v for k, v in match.items()):
+                    return route
+            elif fallback is None:
+                fallback = route
+        return fallback
 
     async def _ensure_instance(self, route: dict):
         """确保实例存在，不存在则按需创建（有历史 session 则 resume）"""
@@ -58,7 +61,7 @@ class MessageRouter:
             return instance
 
         # 检查是否有上次回收时保存的 session_id
-        saved_config = self.agent_manager._instance_configs.get(instance_id, {})
+        saved_config = self.agent_manager.get_instance_config(instance_id)
         last_session_id = saved_config.get("last_session_id")
 
         if last_session_id:

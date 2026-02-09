@@ -1,5 +1,81 @@
 # Claude Agent v2 - 开发日志
 
+## 2026-02-09 遗留代码清理 + 架构统一
+
+### 1. 前端：移除旧 Agent/Session 系统
+
+项目从 v1 的"Agent 模板"架构重构为"Instance 配置"后，前端仍残留两套并行的 session 管理系统和完整的 agent 选择器代码。旧系统调用的 API（`/api/agents`, `/api/sessions`）在服务端已不存在。
+
+**删除的死代码：**
+- `currentAgent`, `agentNameMap` 变量
+- `loadAgents()` — 调用不存在的 `/api/agents`
+- `handleAgentChange()` — 调用不存在的 `/api/restart?agent_id=`
+- `loadSessions()`, `renderSessionList()` — 旧 session 系统
+- `window.switchSession` — 调用不存在的 `/api/sessions/{id}`
+- `confirmRename()`, `confirmDelete()` — 旧 session modal 操作
+- HTML 中的 Agent Selector 下拉框和状态指示器
+
+**修复：**
+- Session Tabs 改为调用 `switchClaudeSession()` / `createNewClaudeSession()`
+- 移动菜单 wrapper 改为包装 `switchClaudeSession`
+- 导出功能改用 `currentInstance` 替代 `agentNameMap`
+- 统一使用 `currentClaudeSessionId` 作为唯一 session 标识
+
+### 2. 后端：API 模块整理
+
+- 将 `agents.py` 的路由（`/api/instances/config`, `/api/subagents`）合并到 `instances.py`，删除 `agents.py`
+- `sessions.py` 所有 API 新增 `instance_id` 查询参数，不再硬编码 `ws-default`
+
+### 3. 后端：Bug 修复
+
+- `TaskManager.complete()` — 修复完成的任务未从活跃列表移除的 bug
+- QQ Channel `_contexts` — 修复 done 后未清理 context 导致的内存泄漏
+- `router.py` `resolve()` — 重写匹配逻辑，移除永远不会触发的 fallback 循环
+
+### 4. 后端：代码质量
+
+- `AgentManager` — 添加 `get_instance_config()`, `get_all_instance_configs()`, `update_instance_config()`, `clear_instance_config_key()` 公开方法，替代外部直接访问 `_instance_configs`
+- `mcp_server.py` — 硬编码路径（`CONTAINER_NAME`, `HOST_PROJECTS`, `CONTAINER_WORKSPACE`）改为环境变量可覆盖
+- `requirements.txt` — 补全 `mcp>=1.0.0`, `playwright>=1.40.0`
+- `run.py` — 更新启动信息，反映当前实际端点
+
+### 5. 清理
+
+- 删除 `sessions.json` — 旧版自定义 session 存储，已被 Claude SDK JSONL 替代
+- 删除 `server/api/agents.py` — 路由已合并到 `instances.py`
+
+## 2026-02-06 Session 管理修复 + 消息加载架构重构
+
+### 1. `restart()` 新建 Session Bug 修复
+
+`instance.restart(resume_session=None)` 本意是创建新 session，但由于 Python truthy/falsy 陷阱，`None` 被当作"未传参"处理，实际恢复了旧 session。
+
+**修改文件：**
+- `server/agents/instance.py` — 引入 `_UNSET` 哨兵值，区分三种调用语义：
+  - `restart()` 不传参 → 保留当前 session
+  - `restart(resume_session=None)` → 创建全新 session
+  - `restart(resume_session="xxx")` → 恢复指定 session
+- `server/api/sessions.py` — `create_new_claude_session` 中清除 `_instance_configs` 的 `last_session_id`，防止实例被 idle 回收后重建时恢复旧 session
+
+### 2. 消息加载改为服务端唯一 truth
+
+旧方案：前端 localStorage 存消息副本 + 服务端 Claude session JSONL 各存一份，容易 desync（跨设备、服务器重启、idle 回收等场景）。
+
+新方案：删除 localStorage 消息持久化，页面启动时从服务端 `/api/claude-sessions/{id}/messages` 加载历史消息。
+
+**修改文件：**
+- `server/api/sessions.py` — `get_claude_sessions` API 新增 `pending_session` 支持（实例未创建但有保存 session 时返回）
+- `web/app.js` — 删除 `saveMessagesToStorage`/`restoreMessagesFromStorage`/`checkServerSession` 等 localStorage 消息函数；新增 `loadCurrentSessionMessages()` 从服务端加载；WebSocket `connected` 事件触发加载
+
+### 3. 多设备 Session 同步
+
+前端新增 `session_changed` WebSocket 消息处理，其他设备创建新 session 或切换 session 时，本设备自动同步 UI。用 `_sessionChangeInitiatedLocally` 标记避免发起设备重复处理。
+
+**设计决策：**
+- 服务端 JSONL 为唯一消息来源，前端不再缓存消息
+- 当前 JSONL 解析只提取纯文本（user/assistant），tool calls、图片等未还原（后续可扩展）
+- `clearStorage()` 保留用于清理旧版 localStorage 数据
+
 ## 2026-02-03 Agent 间通信 + MCP Tools
 
 ### 1. Agent 实例发现与消息传递
