@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import json
 import os
 import subprocess
 import time
@@ -168,6 +169,22 @@ async def jarvis_spawn_task(
                 return {"status": "error", "message": "CLAUDE_CODE_OAUTH_TOKEN not set"}
 
             container_dir = _host_to_container_path(working_dir)
+
+            # 跳过 onboarding + 信任项目目录（避免交互式初始化卡住）
+            onboarding = json.dumps({
+                "hasCompletedOnboarding": True,
+                "projects": {
+                    container_dir: {
+                        "hasTrustDialogAccepted": True,
+                        "hasCompletedProjectOnboarding": True,
+                    }
+                }
+            })
+            subprocess.run(
+                ["docker", "exec", "-i", CONTAINER_NAME, "bash", "-c", "cat > ~/.claude.json"],
+                input=onboarding, capture_output=True, text=True,
+            )
+
             cmd = f'docker exec -it -e CLAUDE_CODE_OAUTH_TOKEN="{token}" {CONTAINER_NAME} bash -c "cd {container_dir} && claude --dangerously-skip-permissions"'
             subprocess.run(["tmux", "send-keys", "-t", task_id, cmd, "Enter"])
             time.sleep(5)

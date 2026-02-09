@@ -3,307 +3,254 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Jarvis Dashboard - Instance Registry</title>
+    <title>Jarvis 控制台</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='%23D97757'%3E%3Cpath d='m3.127 10.604 3.135-1.76.053-.153-.053-.085H6.11l-.525-.032-1.791-.048-1.554-.065-1.505-.08-.38-.081L0 7.832l.036-.234.32-.214.455.04 1.009.069 1.513.105 1.097.064 1.626.17h.259l.036-.105-.089-.065-.068-.064-1.566-1.062-1.695-1.121-.887-.646-.48-.327-.243-.306-.104-.67.435-.48.585.04.15.04.593.456 1.267.981 1.654 1.218.242.202.097-.068.012-.049-.109-.181-.9-1.626-.96-1.655-.428-.686-.113-.411a2 2 0 0 1-.068-.484l.496-.674L4.446 0l.662.089.279.242.411.94.666 1.48 1.033 2.014.302.597.162.553.06.17h.105v-.097l.085-1.134.157-1.392.154-1.792.052-.504.25-.605.497-.327.387.186.319.456-.045.294-.19 1.23-.37 1.93-.243 1.29h.142l.161-.16.654-.868 1.097-1.372.484-.545.565-.601.363-.287h.686l.505.751-.226.775-.707.895-.585.759-.839 1.13-.524.904.048.072.125-.012 1.897-.403 1.024-.186 1.223-.21.553.258.06.263-.218.536-1.307.323-1.533.307-2.284.54-.028.02.032.04 1.029.098.44.024h1.077l2.005.15.525.346.315.424-.053.323-.807.411-3.631-.863-.872-.218h-.12v.073l.726.71 1.331 1.202 1.667 1.55.084.383-.214.302-.226-.032-1.464-1.101-.565-.497-1.28-1.077h-.084v.113l.295.432 1.557 2.34.08.718-.112.234-.404.141-.444-.08-.911-1.28-.94-1.44-.759-1.291-.093.053-.448 4.821-.21.246-.484.186-.403-.307-.214-.496.214-.98.258-1.28.21-1.016.19-1.263.112-.42-.008-.028-.092.012-.953 1.307-1.448 1.957-1.146 1.227-.274.109-.477-.247.045-.44.266-.39 1.586-2.018.956-1.25.617-.723-.004-.105h-.036l-4.212 2.736-.75.096-.324-.302.04-.496.154-.162 1.267-.871z'/%3E%3C/svg%3E">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;500;600;700&family=Crimson+Pro:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600&family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/dashboard.css">
 </head>
 <body>
-    <!-- Parchment texture overlay -->
-    <div class="parchment-bg"></div>
-    <div class="parchment-grain"></div>
-
-    <!-- Decorative corners -->
-    <div class="corner-ornament top-left"></div>
-    <div class="corner-ornament top-right"></div>
-    <div class="corner-ornament bottom-left"></div>
-    <div class="corner-ornament bottom-right"></div>
-
-    <div class="dashboard-container">
-        <!-- Header -->
-        <header class="dashboard-header">
-            <div class="header-ornament left"></div>
-            <div class="header-content">
-                <h1 class="title">
-                    <span class="title-icon">&#x2726;</span>
-                    Instance Registry
-                    <span class="title-icon">&#x2726;</span>
-                </h1>
-                <p class="subtitle">Jarvis System Dashboard</p>
-            </div>
-            <div class="header-ornament right"></div>
-        </header>
-
-        <!-- Status Summary -->
-        <section class="summary-section">
-            <div class="summary-card">
-                <div class="summary-icon">&#x2605;</div>
-                <div class="summary-content">
-                    <span class="summary-value" id="totalInstances">0</span>
-                    <span class="summary-label">Total Instances</span>
+    <div class="app">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <div class="brand-icon">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+                    </svg>
                 </div>
+                <span class="brand-text">Jarvis</span>
             </div>
-            <div class="summary-card">
-                <div class="summary-icon healthy">&#x2713;</div>
-                <div class="summary-content">
-                    <span class="summary-value" id="healthyInstances">0</span>
-                    <span class="summary-label">Healthy</span>
-                </div>
-            </div>
-            <div class="summary-card">
-                <div class="summary-icon processing">&#x21BB;</div>
-                <div class="summary-content">
-                    <span class="summary-value" id="processingInstances">0</span>
-                    <span class="summary-label">Processing</span>
-                </div>
-            </div>
-            <div class="summary-card">
-                <div class="summary-icon stopped">&#x25CF;</div>
-                <div class="summary-content">
-                    <span class="summary-value" id="stoppedInstances">0</span>
-                    <span class="summary-label">Stopped</span>
-                </div>
-            </div>
-        </section>
 
-        <!-- Instances Grid -->
-        <section class="instances-section">
-            <div class="section-header">
-                <h2>
-                    <span class="section-icon">&#x2756;</span>
-                    Active Instances
-                </h2>
-                <div class="header-actions">
-                    <button class="action-btn" id="newInstanceBtn" title="Create new instance">
-                        <span>&#x2795;</span> New Instance
-                    </button>
-                    <button class="refresh-btn" id="refreshBtn" title="Refresh">
-                        <span class="refresh-icon">&#x21BB;</span>
-                        Refresh
+            <nav class="sidebar-nav">
+                <a href="/dashboard" class="nav-item active">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+                    <span>控制台</span>
+                </a>
+                <a href="/" class="nav-item">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    <span>对话</span>
+                </a>
+            </nav>
+
+            <div class="sidebar-footer">
+                <span class="version-tag">v2</span>
+                <span class="update-time" id="lastUpdate">--</span>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main">
+            <!-- Top Bar -->
+            <header class="topbar">
+                <h1 class="page-title">控制台</h1>
+                <div class="topbar-actions">
+                    <button class="btn btn-ghost" id="refreshBtn">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                        刷新
                     </button>
                 </div>
-            </div>
-            <div class="instances-grid" id="instancesGrid">
-                <!-- Instance cards will be inserted here -->
-            </div>
-        </section>
+            </header>
 
-        <!-- MCP Tools Section -->
-        <section class="tools-section">
-            <div class="section-header">
-                <h2>
-                    <span class="section-icon">&#x2692;</span>
-                    MCP Tools Registry
-                </h2>
-            </div>
-            <div class="tools-grid" id="toolsGrid">
-                <!-- Tool cards will be inserted here -->
-            </div>
-        </section>
+            <!-- Stats Row -->
+            <section class="stats-row">
+                <div class="stat-card">
+                    <span class="stat-value" id="totalInstances">0</span>
+                    <span class="stat-label">实例总数</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-dot dot-healthy"></span>
+                    <span class="stat-value" id="healthyInstances">0</span>
+                    <span class="stat-label">运行中</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-dot dot-processing"></span>
+                    <span class="stat-value" id="processingInstances">0</span>
+                    <span class="stat-label">处理中</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-dot dot-stopped"></span>
+                    <span class="stat-value" id="stoppedInstances">0</span>
+                    <span class="stat-label">已停止</span>
+                </div>
+            </section>
 
-        <!-- Quick Actions -->
-        <section class="actions-section">
-            <div class="section-header">
-                <h2>
-                    <span class="section-icon">&#x270E;</span>
-                    Quick Actions
-                </h2>
-            </div>
-            <div class="actions-grid">
-                <a href="/" class="action-card">
-                    <div class="action-icon">&#x2709;</div>
-                    <span class="action-label">Open Chat</span>
-                    <span class="action-desc">WebSocket Interface</span>
-                </a>
-                <button class="action-card" id="restartAllBtn">
-                    <div class="action-icon">&#x21BA;</div>
-                    <span class="action-label">Restart All</span>
-                    <span class="action-desc">Reload Configurations</span>
-                </button>
-                <a href="/settings.html" class="action-card">
-                    <div class="action-icon">&#x2699;</div>
-                    <span class="action-label">Settings</span>
-                    <span class="action-desc">System Configuration</span>
-                </a>
-            </div>
-        </section>
+            <!-- Instances Section -->
+            <section class="section">
+                <div class="section-header">
+                    <h2 class="section-title">实例</h2>
+                    <button class="btn btn-primary" id="newInstanceBtn">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        新建实例
+                    </button>
+                </div>
+                <div class="instances-grid" id="instancesGrid">
+                    <!-- Cards rendered by JS -->
+                </div>
+            </section>
 
-        <!-- Footer -->
-        <footer class="dashboard-footer">
-            <div class="footer-ornament"></div>
-            <p class="footer-text">
-                <span class="footer-icon">&#x2767;</span>
-                Jarvis System v2 &mdash; Instance Registry
-                <span class="footer-icon">&#x2767;</span>
-            </p>
-            <p class="footer-timestamp" id="lastUpdate">Last updated: --</p>
-        </footer>
+            <!-- MCP Tools Section -->
+            <section class="section">
+                <div class="section-header">
+                    <h2 class="section-title">MCP 工具</h2>
+                </div>
+                <div class="tools-grid" id="toolsGrid">
+                    <!-- Tools rendered by JS -->
+                </div>
+            </section>
+
+            <!-- Quick Actions -->
+            <section class="section">
+                <div class="section-header">
+                    <h2 class="section-title">快捷操作</h2>
+                </div>
+                <div class="actions-row">
+                    <a href="/" class="action-card">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                        <span class="action-title">打开对话</span>
+                        <span class="action-desc">WebSocket 聊天界面</span>
+                    </a>
+                    <button class="action-card" id="restartAllBtn">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                        <span class="action-title">全部重启</span>
+                        <span class="action-desc">重载所有实例配置</span>
+                    </button>
+                </div>
+            </section>
+        </main>
     </div>
 
-    <!-- Message Modal -->
+    <!-- Send Message Modal -->
     <div class="modal-overlay" id="messageModal">
-        <div class="modal-content">
+        <div class="modal">
             <div class="modal-header">
-                <h3>
-                    <span class="modal-icon">&#x2709;</span>
-                    Send Message
-                </h3>
+                <h3>发送消息</h3>
                 <button class="modal-close" id="modalClose">&times;</button>
             </div>
             <div class="modal-body">
-                <label class="modal-label">To Instance: <span id="modalInstanceId"></span></label>
-                <textarea class="modal-textarea" id="messageInput" placeholder="Enter your message..."></textarea>
+                <label class="field-label">目标实例：<strong id="modalInstanceId"></strong></label>
+                <textarea class="field-textarea" id="messageInput" placeholder="输入消息内容..."></textarea>
             </div>
             <div class="modal-footer">
-                <button class="modal-btn cancel" id="modalCancel">Cancel</button>
-                <button class="modal-btn send" id="modalSend">Send Message</button>
+                <button class="btn btn-ghost" id="modalCancel">取消</button>
+                <button class="btn btn-primary" id="modalSend">发送</button>
             </div>
         </div>
     </div>
 
     <!-- Instance Detail Modal -->
     <div class="modal-overlay" id="instanceDetailModal">
-        <div class="modal-content modal-large">
+        <div class="modal modal-lg">
             <div class="modal-header">
-                <h3>
-                    <span class="modal-icon">&#x2699;</span>
-                    Instance: <span id="detailInstanceId"></span>
-                </h3>
+                <h3>实例配置 · <span id="detailInstanceId"></span></h3>
                 <button class="modal-close" id="detailModalClose">&times;</button>
             </div>
             <div class="modal-body">
-                <!-- Status Section -->
-                <div class="detail-section">
-                    <h4 class="detail-section-title">&#x2605; Status</h4>
+                <!-- Status -->
+                <div class="config-section">
+                    <h4 class="config-section-title">状态</h4>
                     <div class="status-grid">
-                        <div class="status-item">
-                            <span class="status-label">Status</span>
-                            <span class="status-value" id="detailStatus">—</span>
-                        </div>
-                        <div class="status-item">
-                            <span class="status-label">Session ID</span>
-                            <span class="status-value" id="detailSessionId">—</span>
-                        </div>
-                        <div class="status-item">
-                            <span class="status-label">Queue</span>
-                            <span class="status-value" id="detailQueueSize">—</span>
-                        </div>
-                        <div class="status-item">
-                            <span class="status-label">Last Active</span>
-                            <span class="status-value" id="detailLastActive">—</span>
-                        </div>
+                        <div class="status-item"><span class="status-label">运行状态</span><span class="status-value" id="detailStatus">—</span></div>
+                        <div class="status-item"><span class="status-label">会话 ID</span><span class="status-value mono" id="detailSessionId">—</span></div>
+                        <div class="status-item"><span class="status-label">队列</span><span class="status-value" id="detailQueueSize">—</span></div>
+                        <div class="status-item"><span class="status-label">最后活跃</span><span class="status-value" id="detailLastActive">—</span></div>
                     </div>
                 </div>
 
-                <!-- Configuration Section -->
-                <div class="detail-section">
-                    <h4 class="detail-section-title">&#x270E; Configuration</h4>
-
-                    <div class="config-row">
-                        <label class="config-label">Model</label>
-                        <select id="configModel" class="config-select">
-                            <option value="opus">Opus (Most Capable)</option>
-                            <option value="sonnet">Sonnet (Balanced)</option>
-                            <option value="haiku">Haiku (Fast)</option>
+                <!-- Configuration -->
+                <div class="config-section">
+                    <h4 class="config-section-title">配置</h4>
+                    <div class="config-field">
+                        <label class="field-label">模型</label>
+                        <select id="configModel" class="field-select">
+                            <option value="opus">Opus（最强）</option>
+                            <option value="sonnet">Sonnet（均衡）</option>
+                            <option value="haiku">Haiku（快速）</option>
                         </select>
                     </div>
-
-                    <div class="config-row">
-                        <label class="config-label">Permission Mode</label>
-                        <select id="configPermissionMode" class="config-select">
-                            <option value="bypassPermissions">Bypass Permissions (Full Auto)</option>
-                            <option value="acceptEdits">Accept Edits (Auto-accept file edits)</option>
-                            <option value="plan">Plan Mode (Requires approval)</option>
-                            <option value="default">Default (Ask for everything)</option>
+                    <div class="config-field">
+                        <label class="field-label">权限模式</label>
+                        <select id="configPermissionMode" class="field-select">
+                            <option value="bypassPermissions">跳过权限（全自动）</option>
+                            <option value="acceptEdits">自动接受编辑</option>
+                            <option value="plan">规划模式（需审批）</option>
+                            <option value="default">默认（逐项确认）</option>
                         </select>
                     </div>
                 </div>
 
-                <!-- MCP Section -->
-                <div class="detail-section">
-                    <h4 class="detail-section-title">&#x2692; MCP Servers</h4>
-                    <div class="config-row">
-                        <label class="config-label">
-                            <input type="checkbox" id="configMcpEnabled" checked>
-                            Enable MCP
-                        </label>
-                    </div>
-                    <div class="mcp-servers-grid" id="mcpServersGrid">
-                        <!-- MCP server checkboxes will be inserted here -->
-                    </div>
+                <!-- MCP -->
+                <div class="config-section">
+                    <h4 class="config-section-title">MCP 服务器</h4>
+                    <label class="toggle-row">
+                        <input type="checkbox" id="configMcpEnabled" checked>
+                        <span>启用 MCP</span>
+                    </label>
+                    <div class="chip-grid" id="mcpServersGrid"></div>
                 </div>
 
-                <!-- Tools Section -->
-                <div class="detail-section">
-                    <h4 class="detail-section-title">&#x2756; Allowed Tools</h4>
-                    <div class="tools-checkbox-grid" id="toolsCheckboxGrid">
-                        <!-- Tool checkboxes will be inserted here -->
-                    </div>
+                <!-- Tools -->
+                <div class="config-section">
+                    <h4 class="config-section-title">工具权限</h4>
+                    <div class="chip-grid" id="toolsCheckboxGrid"></div>
                 </div>
 
-                <!-- System Prompt Section -->
-                <div class="detail-section">
-                    <h4 class="detail-section-title">&#x270D; System Prompt</h4>
-                    <textarea id="configSystemPrompt" class="config-textarea" placeholder="Enter system prompt..."></textarea>
-                    <p class="config-hint">Leave empty to use default from _default.json</p>
+                <!-- System Prompt -->
+                <div class="config-section">
+                    <h4 class="config-section-title">系统提示词</h4>
+                    <textarea id="configSystemPrompt" class="field-textarea" placeholder="留空则使用 _default.json 中的默认值"></textarea>
+                    <p class="field-hint">仅覆盖项，留空使用默认配置</p>
                 </div>
             </div>
-            <div class="modal-footer">
-                <button class="modal-btn danger" id="detailDeleteBtn">Delete</button>
-                <button class="modal-btn cancel" id="detailCancelBtn">Cancel</button>
-                <button class="modal-btn send" id="detailSaveBtn">Save & Restart</button>
+            <div class="modal-footer modal-footer-between">
+                <button class="btn btn-danger" id="detailDeleteBtn">删除实例</button>
+                <div class="modal-footer-right">
+                    <button class="btn btn-ghost" id="detailCancelBtn">取消</button>
+                    <button class="btn btn-primary" id="detailSaveBtn">保存并重启</button>
+                </div>
             </div>
         </div>
     </div>
 
     <!-- New Instance Modal -->
     <div class="modal-overlay" id="newInstanceModal">
-        <div class="modal-content">
+        <div class="modal">
             <div class="modal-header">
-                <h3>
-                    <span class="modal-icon">&#x2795;</span>
-                    Create New Instance
-                </h3>
+                <h3>新建实例</h3>
                 <button class="modal-close" id="newInstanceClose">&times;</button>
             </div>
             <div class="modal-body">
-                <div class="config-row">
-                    <label class="config-label">Instance ID</label>
-                    <input type="text" id="newInstanceId" class="config-input" placeholder="e.g., my-agent">
-                    <p class="config-hint">Unique identifier for this instance</p>
+                <div class="config-field">
+                    <label class="field-label">实例 ID</label>
+                    <input type="text" id="newInstanceId" class="field-input" placeholder="例如：my-agent">
+                    <p class="field-hint">唯一标识符，支持字母、数字、连字符</p>
                 </div>
-
-                <div class="config-row">
-                    <label class="config-label">Model</label>
-                    <select id="newConfigModel" class="config-select">
-                        <option value="sonnet" selected>Sonnet (Balanced)</option>
-                        <option value="opus">Opus (Most Capable)</option>
-                        <option value="haiku">Haiku (Fast)</option>
+                <div class="config-field">
+                    <label class="field-label">模型</label>
+                    <select id="newConfigModel" class="field-select">
+                        <option value="sonnet" selected>Sonnet（均衡）</option>
+                        <option value="opus">Opus（最强）</option>
+                        <option value="haiku">Haiku（快速）</option>
                     </select>
                 </div>
-
-                <div class="config-row">
-                    <label class="config-label">Permission Mode</label>
-                    <select id="newConfigPermissionMode" class="config-select">
-                        <option value="bypassPermissions" selected>Bypass Permissions (Full Auto)</option>
-                        <option value="acceptEdits">Accept Edits</option>
-                        <option value="plan">Plan Mode</option>
-                        <option value="default">Default</option>
+                <div class="config-field">
+                    <label class="field-label">权限模式</label>
+                    <select id="newConfigPermissionMode" class="field-select">
+                        <option value="bypassPermissions" selected>跳过权限（全自动）</option>
+                        <option value="acceptEdits">自动接受编辑</option>
+                        <option value="plan">规划模式</option>
+                        <option value="default">默认</option>
                     </select>
                 </div>
-
-                <div class="config-row">
-                    <label class="config-label">
-                        <input type="checkbox" id="newConfigMcpEnabled" checked>
-                        Enable MCP
-                    </label>
-                </div>
+                <label class="toggle-row">
+                    <input type="checkbox" id="newConfigMcpEnabled" checked>
+                    <span>启用 MCP</span>
+                </label>
             </div>
             <div class="modal-footer">
-                <button class="modal-btn cancel" id="newInstanceCancel">Cancel</button>
-                <button class="modal-btn send" id="newInstanceCreate">Create</button>
+                <button class="btn btn-ghost" id="newInstanceCancel">取消</button>
+                <button class="btn btn-primary" id="newInstanceCreate">创建</button>
             </div>
         </div>
     </div>

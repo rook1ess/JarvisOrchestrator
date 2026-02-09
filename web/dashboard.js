@@ -1,6 +1,5 @@
 /**
- * Jarvis Dashboard - Instance Registry
- * Parchment Scroll Style Dashboard
+ * Jarvis 控制台
  */
 
 // State
@@ -90,7 +89,6 @@ async function fetchMCPTools() {
         });
         if (!response.ok) throw new Error('Failed to fetch tools');
 
-        // Parse SSE response - extract the JSON from the event stream
         const text = await response.text();
         const lines = text.split('\n');
         for (const line of lines) {
@@ -133,7 +131,6 @@ async function fetchInstanceConfig(instanceId) {
         const response = await fetch(`/api/instances/${encodeURIComponent(instanceId)}/config`);
         if (!response.ok) {
             if (response.status === 404) {
-                // No config file, return defaults
                 return { merged_config: {}, instance_overrides: {} };
             }
             throw new Error('Failed to fetch config');
@@ -236,73 +233,75 @@ function updateSummary() {
 }
 
 function formatTimestamp(timestamp) {
-    if (!timestamp) return '—';
+    if (!timestamp) return '\u2014';
     const date = new Date(timestamp * 1000);
     const now = new Date();
     const diff = Math.floor((now - date) / 1000);
 
-    if (diff < 60) return 'Just now';
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-    return date.toLocaleDateString();
+    if (diff < 60) return '\u521a\u521a';
+    if (diff < 3600) return `${Math.floor(diff / 60)} \u5206\u949f\u524d`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)} \u5c0f\u65f6\u524d`;
+    return date.toLocaleDateString('zh-CN');
+}
+
+function statusText(instance) {
+    if (instance.is_processing) return '\u5904\u7406\u4e2d';
+    const map = { healthy: '\u8fd0\u884c\u4e2d', stopped: '\u5df2\u505c\u6b62', dead: '\u5df2\u5d29\u6e83' };
+    return map[instance.status] || instance.status;
+}
+
+function statusClass(instance) {
+    return instance.is_processing ? 'processing' : instance.status;
 }
 
 function createInstanceCard(instance) {
-    const statusClass = instance.is_processing ? 'processing' : instance.status;
-    const statusText = instance.is_processing ? 'Processing' :
-                       instance.status.charAt(0).toUpperCase() + instance.status.slice(1);
-
+    const cls = statusClass(instance);
     const card = document.createElement('div');
-    card.className = `instance-card ${statusClass}`;
+    card.className = 'instance-card';
     card.innerHTML = `
-        <div class="instance-header">
-            <span class="instance-name">${escapeHtml(instance.instance_id)}</span>
-            <span class="instance-status ${statusClass}">
-                <span class="status-dot"></span>
-                ${statusText}
+        <div class="card-top">
+            <span class="card-name">${escapeHtml(instance.instance_id)}</span>
+            <span class="card-badge ${cls}">
+                <span class="badge-dot"></span>
+                ${statusText(instance)}
             </span>
         </div>
-        <div class="instance-details">
-            <div class="detail-row">
-                <span class="detail-label">Queue</span>
-                <span class="detail-value">${instance.queue_size} messages</span>
+        <div class="card-meta">
+            <div class="meta-row">
+                <span class="meta-label">\u961f\u5217</span>
+                <span class="meta-value">${instance.queue_size} \u6761\u6d88\u606f</span>
             </div>
-            <div class="detail-row">
-                <span class="detail-label">Session</span>
-                <span class="detail-value">${instance.session_id ? instance.session_id.slice(0, 8) + '...' : '—'}</span>
+            <div class="meta-row">
+                <span class="meta-label">\u4f1a\u8bdd</span>
+                <span class="meta-value">${instance.session_id ? instance.session_id.slice(0, 8) + '\u2026' : '\u2014'}</span>
             </div>
-            <div class="detail-row">
-                <span class="detail-label">Last Active</span>
-                <span class="detail-value">${formatTimestamp(instance.last_active_at)}</span>
+            <div class="meta-row">
+                <span class="meta-label">\u6700\u540e\u6d3b\u8dc3</span>
+                <span class="meta-value">${formatTimestamp(instance.last_active_at)}</span>
             </div>
         </div>
-        <div class="instance-actions">
-            <button class="instance-btn message" data-id="${escapeHtml(instance.instance_id)}" ${instance.status === 'stopped' ? 'disabled' : ''}>
-                ✉ Message
+        <div class="card-actions">
+            <button class="card-action action-message" data-id="${escapeHtml(instance.instance_id)}" ${instance.status === 'stopped' ? 'disabled' : ''}>
+                \u2709 \u6d88\u606f
             </button>
-            <button class="instance-btn restart" data-id="${escapeHtml(instance.instance_id)}" ${instance.status === 'stopped' ? 'disabled' : ''}>
-                ↻ Restart
+            <button class="card-action action-restart" data-id="${escapeHtml(instance.instance_id)}" ${instance.status === 'stopped' ? 'disabled' : ''}>
+                \u21bb \u91cd\u542f
             </button>
             ${instance.instance_id.startsWith('ws-') ? `
-                <a href="/?instance=${encodeURIComponent(instance.instance_id)}" class="instance-btn chat">
-                    → Chat
+                <a href="/?instance=${encodeURIComponent(instance.instance_id)}" class="card-action action-chat">
+                    \u2192 \u5bf9\u8bdd
                 </a>
             ` : ''}
         </div>
     `;
 
-    // Click on card (not buttons) opens detail modal
     card.addEventListener('click', (e) => {
-        // Don't open detail if clicking on action buttons or links
-        if (e.target.closest('.instance-btn') || e.target.closest('a')) {
-            return;
-        }
+        if (e.target.closest('.card-action') || e.target.closest('a')) return;
         openDetailModal(instance);
     });
 
-    // Event listeners for buttons
-    const messageBtn = card.querySelector('.instance-btn.message');
-    const restartBtn = card.querySelector('.instance-btn.restart');
+    const messageBtn = card.querySelector('.action-message');
+    const restartBtn = card.querySelector('.action-restart');
 
     messageBtn?.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -320,9 +319,9 @@ function renderInstances() {
     if (state.instances.length === 0) {
         elements.instancesGrid.innerHTML = `
             <div class="empty-state">
-                <div class="empty-icon">☽</div>
-                <p>No instances found</p>
-                <p style="font-size: 0.9rem; margin-top: 8px;">Click "+ New Instance" to create one</p>
+                <div class="empty-icon">\u25cb</div>
+                <p>\u6682\u65e0\u5b9e\u4f8b</p>
+                <p style="font-size: 0.85rem; margin-top: 6px; color: var(--text-tertiary);">\u70b9\u51fb\u201c\u65b0\u5efa\u5b9e\u4f8b\u201d\u521b\u5efa\u7b2c\u4e00\u4e2a</p>
             </div>
         `;
         return;
@@ -344,8 +343,8 @@ function renderTools() {
     if (state.tools.length === 0) {
         elements.toolsGrid.innerHTML = `
             <div class="empty-state">
-                <div class="empty-icon">⚙</div>
-                <p>No MCP tools available</p>
+                <div class="empty-icon">\u2699</div>
+                <p>\u65e0 MCP \u5de5\u5177</p>
             </div>
         `;
         return;
@@ -353,7 +352,6 @@ function renderTools() {
 
     elements.toolsGrid.innerHTML = '';
 
-    // Group by category
     const categories = {};
     state.tools.forEach(tool => {
         const category = getToolCategory(tool.name);
@@ -361,24 +359,23 @@ function renderTools() {
         categories[category].push(tool);
     });
 
-    // Render tools
     Object.entries(categories).forEach(([category, tools]) => {
         tools.forEach(tool => {
-            const card = document.createElement('div');
-            card.className = 'tool-card';
-            card.innerHTML = `
-                <div class="tool-name">${escapeHtml(tool.name)}</div>
-                <div class="tool-category">${category}</div>
+            const chip = document.createElement('div');
+            chip.className = 'tool-chip';
+            chip.innerHTML = `
+                <span class="chip-category">${category}</span>
+                ${escapeHtml(tool.name)}
             `;
-            card.title = tool.description || '';
-            elements.toolsGrid.appendChild(card);
+            chip.title = tool.description || '';
+            elements.toolsGrid.appendChild(chip);
         });
     });
 }
 
 function renderMCPServersCheckboxes(disabledList = []) {
     if (state.mcpServers.length === 0) {
-        elements.mcpServersGrid.innerHTML = '<p class="no-mcp-servers">No MCP servers found</p>';
+        elements.mcpServersGrid.innerHTML = '<p class="no-mcp-servers">\u672a\u627e\u5230 MCP \u670d\u52a1\u5668</p>';
         return;
     }
 
@@ -388,18 +385,17 @@ function renderMCPServersCheckboxes(disabledList = []) {
         const sourceLabel = server.source === 'user' ? 'USER' : 'PROJECT';
         const sourceClass = server.source === 'user' ? 'source-user' : 'source-project';
         const item = document.createElement('div');
-        item.className = 'mcp-server-item';
+        item.className = 'chip-item';
         item.innerHTML = `
             <input type="checkbox" id="mcp_${escapeHtml(server.name)}"
                    data-server="${escapeHtml(server.name)}"
                    ${isEnabled ? 'checked' : ''}>
             <label for="mcp_${escapeHtml(server.name)}">${escapeHtml(server.name)}</label>
-            <span class="server-source ${sourceClass}">${sourceLabel}</span>
+            <span class="source-badge ${sourceClass}">${sourceLabel}</span>
         `;
         elements.mcpServersGrid.appendChild(item);
     });
 
-    // Update disabled state based on MCP enabled checkbox
     updateMcpGridState();
 }
 
@@ -408,7 +404,7 @@ function renderToolsCheckboxes(allowedTools = []) {
     state.availableTools.forEach(tool => {
         const isAllowed = allowedTools.length === 0 || allowedTools.includes(tool.id);
         const item = document.createElement('div');
-        item.className = 'tool-checkbox-item';
+        item.className = 'chip-item';
         item.innerHTML = `
             <input type="checkbox" id="tool_${escapeHtml(tool.id)}"
                    data-tool="${escapeHtml(tool.id)}"
@@ -426,13 +422,17 @@ function updateMcpGridState() {
 
 function updateTimestamp() {
     const now = new Date();
-    elements.lastUpdate.textContent = `Last updated: ${now.toLocaleTimeString()}`;
+    const h = String(now.getHours()).padStart(2, '0');
+    const m = String(now.getMinutes()).padStart(2, '0');
+    const s = String(now.getSeconds()).padStart(2, '0');
+    elements.lastUpdate.textContent = `${h}:${m}:${s}`;
 }
 
 // Event Handlers
 async function handleRefresh() {
     elements.refreshBtn.disabled = true;
-    elements.refreshBtn.innerHTML = '<span class="refresh-icon" style="animation: spin 0.5s linear infinite;">↻</span> Loading...';
+    const svg = elements.refreshBtn.querySelector('svg');
+    if (svg) svg.style.animation = 'spin 0.6s linear infinite';
 
     try {
         const [instances, tools, mcpServers, availableTools] = await Promise.all([
@@ -455,12 +455,12 @@ async function handleRefresh() {
         console.error('Refresh failed:', error);
     } finally {
         elements.refreshBtn.disabled = false;
-        elements.refreshBtn.innerHTML = '<span class="refresh-icon">↻</span> Refresh';
+        if (svg) svg.style.animation = '';
     }
 }
 
 async function handleRestart(instanceId) {
-    if (!confirm(`Restart instance "${instanceId}"?\n\nThis will reload configuration but preserve the conversation.`)) {
+    if (!confirm(`\u786e\u8ba4\u91cd\u542f\u5b9e\u4f8b\u201c${instanceId}\u201d\uff1f\n\n\u5c06\u91cd\u65b0\u52a0\u8f7d\u914d\u7f6e\uff0c\u4f46\u4fdd\u7559\u5bf9\u8bdd\u8bb0\u5f55\u3002`)) {
         return;
     }
 
@@ -468,28 +468,26 @@ async function handleRestart(instanceId) {
         await restartInstance(instanceId);
         await handleRefresh();
     } catch (error) {
-        alert(`Failed to restart instance: ${error.message}`);
+        alert(`\u91cd\u542f\u5931\u8d25\uff1a${error.message}`);
     }
 }
 
 async function handleRestartAll() {
     const activeInstances = state.instances.filter(i => i.status !== 'stopped');
     if (activeInstances.length === 0) {
-        alert('No active instances to restart.');
+        alert('\u6ca1\u6709\u8fd0\u884c\u4e2d\u7684\u5b9e\u4f8b\u3002');
         return;
     }
 
-    if (!confirm(`Restart all ${activeInstances.length} active instance(s)?`)) {
+    if (!confirm(`\u786e\u8ba4\u91cd\u542f\u5168\u90e8 ${activeInstances.length} \u4e2a\u5b9e\u4f8b\uff1f`)) {
         return;
     }
 
     try {
-        await Promise.all(
-            activeInstances.map(i => restartInstance(i.instance_id))
-        );
+        await Promise.all(activeInstances.map(i => restartInstance(i.instance_id)));
         await handleRefresh();
     } catch (error) {
-        alert(`Some restarts failed: ${error.message}`);
+        alert(`\u90e8\u5206\u91cd\u542f\u5931\u8d25\uff1a${error.message}`);
     }
 }
 
@@ -516,7 +514,7 @@ async function handleSendMessage() {
         closeMessageModal();
         await handleRefresh();
     } catch (error) {
-        alert(`Failed to send message: ${error.message}`);
+        alert(`\u53d1\u9001\u5931\u8d25\uff1a${error.message}`);
     }
 }
 
@@ -525,38 +523,25 @@ async function openDetailModal(instance) {
     state.currentDetailInstance = instance;
     elements.detailInstanceId.textContent = instance.instance_id;
 
-    // Fill status section
-    const statusText = instance.is_processing ? 'Processing' :
-                       instance.status.charAt(0).toUpperCase() + instance.status.slice(1);
-    elements.detailStatus.textContent = statusText;
-    elements.detailSessionId.textContent = instance.session_id ? instance.session_id.slice(0, 16) + '...' : '—';
-    elements.detailQueueSize.textContent = `${instance.queue_size} messages`;
+    elements.detailStatus.textContent = statusText(instance);
+    elements.detailSessionId.textContent = instance.session_id ? instance.session_id.slice(0, 16) + '\u2026' : '\u2014';
+    elements.detailQueueSize.textContent = `${instance.queue_size} \u6761\u6d88\u606f`;
     elements.detailLastActive.textContent = formatTimestamp(instance.last_active_at);
 
-    // Fetch and fill config
     const { merged_config, instance_overrides } = await fetchInstanceConfig(instance.instance_id);
 
-    // Model
     elements.configModel.value = merged_config.model || 'sonnet';
-
-    // Permission mode
     elements.configPermissionMode.value = merged_config.permission_mode || 'bypassPermissions';
-
-    // MCP enabled
     elements.configMcpEnabled.checked = merged_config.mcp_enabled !== false;
 
-    // MCP servers (show checkboxes with disabled ones unchecked)
     const disabledMcp = merged_config.mcp_servers_disabled || [];
     renderMCPServersCheckboxes(disabledMcp);
 
-    // Tools
     const allowedTools = merged_config.allowed_tools || [];
     renderToolsCheckboxes(allowedTools);
 
-    // System prompt (only show override, not merged)
     elements.configSystemPrompt.value = instance_overrides.system_prompt || '';
 
-    // Show modal
     elements.instanceDetailModal.classList.add('active');
 }
 
@@ -570,56 +555,46 @@ async function handleSaveConfig() {
 
     const instanceId = state.currentDetailInstance.instance_id;
 
-    // Collect config values
     const config = {
         model: elements.configModel.value,
         permission_mode: elements.configPermissionMode.value,
         mcp_enabled: elements.configMcpEnabled.checked
     };
 
-    // Collect disabled MCP servers (unchecked ones)
     const disabledMcp = [];
     elements.mcpServersGrid.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-        if (!cb.checked) {
-            disabledMcp.push(cb.dataset.server);
-        }
+        if (!cb.checked) disabledMcp.push(cb.dataset.server);
     });
     config.mcp_servers_disabled = disabledMcp;
 
-    // Collect allowed tools (checked ones)
     const allowedTools = [];
     elements.toolsCheckboxGrid.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-        if (cb.checked) {
-            allowedTools.push(cb.dataset.tool);
-        }
+        if (cb.checked) allowedTools.push(cb.dataset.tool);
     });
     config.allowed_tools = allowedTools;
 
-    // System prompt (only if not empty)
     const systemPrompt = elements.configSystemPrompt.value.trim();
-    if (systemPrompt) {
-        config.system_prompt = systemPrompt;
-    }
+    if (systemPrompt) config.system_prompt = systemPrompt;
 
     try {
         elements.detailSaveBtn.disabled = true;
-        elements.detailSaveBtn.textContent = 'Saving...';
+        elements.detailSaveBtn.textContent = '\u4fdd\u5b58\u4e2d\u2026';
 
         const result = await saveInstanceConfig(instanceId, config);
 
         if (result.restarted) {
-            alert(`Configuration saved and instance restarted successfully.`);
+            alert('\u914d\u7f6e\u5df2\u4fdd\u5b58\uff0c\u5b9e\u4f8b\u5df2\u91cd\u542f\u3002');
         } else {
-            alert(`Configuration saved. Instance will use new config on next start.`);
+            alert('\u914d\u7f6e\u5df2\u4fdd\u5b58\uff0c\u4e0b\u6b21\u542f\u52a8\u65f6\u751f\u6548\u3002');
         }
 
         closeDetailModal();
         await handleRefresh();
     } catch (error) {
-        alert(`Failed to save configuration: ${error.message}`);
+        alert(`\u4fdd\u5b58\u5931\u8d25\uff1a${error.message}`);
     } finally {
         elements.detailSaveBtn.disabled = false;
-        elements.detailSaveBtn.textContent = 'Save & Restart';
+        elements.detailSaveBtn.textContent = '\u4fdd\u5b58\u5e76\u91cd\u542f';
     }
 }
 
@@ -628,17 +603,17 @@ async function handleDeleteInstance() {
 
     const instanceId = state.currentDetailInstance.instance_id;
 
-    if (!confirm(`Delete instance "${instanceId}"?\n\nThis will remove the configuration file. This action cannot be undone.`)) {
+    if (!confirm(`\u786e\u8ba4\u5220\u9664\u5b9e\u4f8b\u201c${instanceId}\u201d\uff1f\n\n\u5c06\u5220\u9664\u914d\u7f6e\u6587\u4ef6\uff0c\u6b64\u64cd\u4f5c\u4e0d\u53ef\u64a4\u9500\u3002`)) {
         return;
     }
 
     try {
         await deleteInstance(instanceId);
-        alert(`Instance "${instanceId}" deleted.`);
+        alert(`\u5b9e\u4f8b\u201c${instanceId}\u201d\u5df2\u5220\u9664\u3002`);
         closeDetailModal();
         await handleRefresh();
     } catch (error) {
-        alert(`Failed to delete instance: ${error.message}`);
+        alert(`\u5220\u9664\u5931\u8d25\uff1a${error.message}`);
     }
 }
 
@@ -659,13 +634,12 @@ function closeNewInstanceModal() {
 async function handleCreateInstance() {
     const instanceId = elements.newInstanceId.value.trim();
     if (!instanceId) {
-        alert('Please enter an instance ID');
+        alert('\u8bf7\u8f93\u5165\u5b9e\u4f8b ID');
         return;
     }
 
-    // Validate instance ID format
     if (!/^[a-zA-Z0-9_-]+$/.test(instanceId)) {
-        alert('Instance ID can only contain letters, numbers, hyphens, and underscores');
+        alert('\u5b9e\u4f8b ID \u53ea\u80fd\u5305\u542b\u5b57\u6bcd\u3001\u6570\u5b57\u3001\u8fde\u5b57\u7b26\u548c\u4e0b\u5212\u7ebf');
         return;
     }
 
@@ -675,22 +649,22 @@ async function handleCreateInstance() {
         permission_mode: elements.newConfigPermissionMode.value,
         mcp_enabled: elements.newConfigMcpEnabled.checked,
         mcp_servers_disabled: [],
-        allowed_tools: state.availableTools.map(t => t.id) // Enable all tools by default
+        allowed_tools: state.availableTools.map(t => t.id)
     };
 
     try {
         elements.newInstanceCreate.disabled = true;
-        elements.newInstanceCreate.textContent = 'Creating...';
+        elements.newInstanceCreate.textContent = '\u521b\u5efa\u4e2d\u2026';
 
         await createInstance(data);
-        alert(`Instance "${instanceId}" created successfully.`);
+        alert(`\u5b9e\u4f8b\u201c${instanceId}\u201d\u5df2\u521b\u5efa\u3002`);
         closeNewInstanceModal();
         await handleRefresh();
     } catch (error) {
-        alert(`Failed to create instance: ${error.message}`);
+        alert(`\u521b\u5efa\u5931\u8d25\uff1a${error.message}`);
     } finally {
         elements.newInstanceCreate.disabled = false;
-        elements.newInstanceCreate.textContent = 'Create';
+        elements.newInstanceCreate.textContent = '\u521b\u5efa';
     }
 }
 
@@ -703,7 +677,6 @@ function escapeHtml(text) {
 
 // Initialize
 function init() {
-    // Message Modal listeners
     elements.refreshBtn.addEventListener('click', handleRefresh);
     elements.restartAllBtn.addEventListener('click', handleRestartAll);
     elements.modalClose.addEventListener('click', closeMessageModal);
@@ -715,12 +688,9 @@ function init() {
     });
 
     elements.messageInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-            handleSendMessage();
-        }
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleSendMessage();
     });
 
-    // Detail Modal listeners
     elements.detailModalClose.addEventListener('click', closeDetailModal);
     elements.detailCancelBtn.addEventListener('click', closeDetailModal);
     elements.detailSaveBtn.addEventListener('click', handleSaveConfig);
@@ -730,10 +700,8 @@ function init() {
         if (e.target === elements.instanceDetailModal) closeDetailModal();
     });
 
-    // MCP enabled toggle
     elements.configMcpEnabled.addEventListener('change', updateMcpGridState);
 
-    // New Instance Modal listeners
     elements.newInstanceBtn.addEventListener('click', openNewInstanceModal);
     elements.newInstanceClose.addEventListener('click', closeNewInstanceModal);
     elements.newInstanceCancel.addEventListener('click', closeNewInstanceModal);
@@ -744,12 +712,9 @@ function init() {
     });
 
     elements.newInstanceId.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            handleCreateInstance();
-        }
+        if (e.key === 'Enter') handleCreateInstance();
     });
 
-    // Close modals on Escape
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
             if (elements.messageModal.classList.contains('active')) closeMessageModal();
@@ -758,12 +723,8 @@ function init() {
         }
     });
 
-    // Initial load
     handleRefresh();
-
-    // Auto refresh every 30 seconds
     state.refreshInterval = setInterval(handleRefresh, 30000);
 }
 
-// Start
 document.addEventListener('DOMContentLoaded', init);

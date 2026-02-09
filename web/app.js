@@ -2178,10 +2178,10 @@
                 return;
             }
 
-            // Ctrl/Cmd + ,: Open settings
+            // Ctrl/Cmd + ,: Open dashboard
             if ((e.ctrlKey || e.metaKey) && e.key === ',') {
                 e.preventDefault();
-                window.location.href = '/settings';
+                window.location.href = '/dashboard';
                 return;
             }
 
