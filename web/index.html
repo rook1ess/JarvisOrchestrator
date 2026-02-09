@@ -91,13 +91,12 @@
                     </button>
                 </div>
                 <div class="role-indicator" id="roleIndicator">
-                    <span class="role-label">Agent:</span>
-                    <span class="role-name" id="roleName">Loading...</span>
                     <span class="role-status" id="roleStatus">
                         <svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor">
                             <circle cx="12" cy="12" r="10"/>
                         </svg>
                     </span>
+                    <span class="role-name" id="roleName">Connecting...</span>
                 </div>
             </header>
 
@@ -147,9 +146,6 @@
                 </div>
             </div>
 
-            <!-- Toast Notification -->
-            <div class="toast-container" id="toastContainer"></div>
-
             <!-- Messages Container -->
             <div class="messages-container" id="messagesContainer">
                 <div class="messages-wrapper" id="messagesWrapper">
@@ -193,55 +189,6 @@
                 </div>
             </div>
         </main>
-    </div>
-
-    <!-- Session Rename Modal -->
-    <div class="modal" id="renameModal">
-        <div class="modal-backdrop"></div>
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>Rename Session</h3>
-                <button type="button" class="modal-close" id="closeRenameModalBtn">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                </button>
-            </div>
-            <div class="modal-body">
-                <div class="form-group">
-                    <label for="sessionNameInput">Session Name</label>
-                    <input type="text" id="sessionNameInput" class="form-input" placeholder="Enter session name">
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" id="cancelRenameBtn">Cancel</button>
-                <button type="button" class="btn btn-primary" id="confirmRenameBtn">Save</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Delete Confirmation Modal -->
-    <div class="modal" id="deleteModal">
-        <div class="modal-backdrop"></div>
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>Clear Conversation</h3>
-                <button type="button" class="modal-close" id="closeDeleteModalBtn">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                </button>
-            </div>
-            <div class="modal-body">
-                <p id="deleteConfirmText">Are you sure you want to clear this conversation?</p>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" id="cancelDeleteBtn">Cancel</button>
-                <button type="button" class="btn btn-danger" id="confirmDeleteBtn">Clear</button>
-            </div>
-        </div>
     </div>
 
     <!-- Bookmarks Panel -->

@@ -17,14 +17,6 @@
     }
     let currentInstance = getCurrentInstance();
 
-    // 按实例分离存储 key（仅用于清理旧数据）
-    function getStorageKey() {
-        return `jarvis_chat_history_${currentInstance}`;
-    }
-    function getSessionKey() {
-        return `jarvis_session_${currentInstance}`;
-    }
-
     // Typewriter effect settings
     const TYPEWRITER_CONFIG = {
         enabled: true,
@@ -51,11 +43,6 @@
     // ============================================
     // Session Message Loading (服务端为唯一 truth)
     // ============================================
-    function clearStorage() {
-        localStorage.removeItem(getStorageKey());
-        localStorage.removeItem(getSessionKey());
-    }
-
     async function loadCurrentSessionMessages() {
         /**
          * 从服务端加载当前 session 的消息历史并显示。
@@ -504,7 +491,12 @@
             if (status === 'error') elements.roleStatus.classList.add('error');
         }
         if (elements.roleName) {
-            elements.roleName.textContent = text;
+            // When idle/ready, show the instance name; otherwise show status text
+            if (status === 'ready') {
+                elements.roleName.textContent = currentInstance;
+            } else {
+                elements.roleName.textContent = text;
+            }
         }
     }
 
@@ -695,7 +687,6 @@
             // 清空 UI
             elements.messagesWrapper.innerHTML = '';
             state.messages = [];
-            clearStorage();
             showWelcomeMessage();
 
             // 清空附件
@@ -748,245 +739,9 @@
         }
     }
 
-    function clearConversation() {
-        // Clear UI
-        elements.messagesWrapper.innerHTML = '';
-        state.messages = [];
-
-        // Show welcome message
-        elements.messagesWrapper.innerHTML = `
-            <div class="welcome-message" id="welcomeMessage">
-                <div class="welcome-icon">
-                    <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
-                        <path d="M12 2L2 7L12 12L22 7L12 2Z"/>
-                        <path d="M2 17L12 22L22 17"/>
-                        <path d="M2 12L12 17L22 12"/>
-                    </svg>
-                </div>
-                <h2>Welcome</h2>
-                <p>Start a conversation with your AI assistant</p>
-            </div>
-        `;
-
-        // Clear attachments
-        state.attachments = [];
-        renderAttachmentPreviews();
-
-        // Clear storage
-        clearStorage();
-
-        setStatus('ready', 'Ready');
-        showToast('Conversation Cleared', 'Ready for a new conversation', 'success', 2000);
-    }
-
-    // Keep createNewSession as alias for backward compatibility
     async function createNewSession() {
-        // 使用新的 Claude session API
         await createNewClaudeSession();
     }
-
-    // Initialize modal event listeners (legacy rename/delete modals removed)
-    function initModals() {
-        // Modals are now handled by Claude Sessions system (deleteClaudeSession, etc.)
-    }
-
-    // ============================================
-    // Session Tabs Management
-    // ============================================
-    const TABS_STORAGE_KEY = 'jarvis_session_tabs';
-    let openTabs = []; // Array of { sessionId, name }
-    let activeTabId = null;
-
-    const sessionTabsContainer = document.getElementById('sessionTabsContainer');
-    const addSessionTabBtn = document.getElementById('addSessionTabBtn');
-
-    function loadTabsFromStorage() {
-        try {
-            const saved = localStorage.getItem(TABS_STORAGE_KEY);
-            if (saved) {
-                return JSON.parse(saved);
-            }
-        } catch (e) {
-            console.warn('Failed to load tabs from storage:', e);
-        }
-        return [];
-    }
-
-    function saveTabsToStorage() {
-        try {
-            localStorage.setItem(TABS_STORAGE_KEY, JSON.stringify(openTabs));
-        } catch (e) {
-            console.warn('Failed to save tabs to storage:', e);
-        }
-    }
-
-    function initSessionTabs() {
-        // Load saved tabs
-        openTabs = loadTabsFromStorage();
-
-        // If no tabs but we have a current Claude session, add it as a tab
-        if (openTabs.length === 0 && currentClaudeSessionId) {
-            openTabs.push({
-                sessionId: currentClaudeSessionId,
-                name: 'New Session'
-            });
-        }
-
-        activeTabId = currentClaudeSessionId;
-        renderSessionTabs();
-
-        // Add tab button event
-        addSessionTabBtn?.addEventListener('click', addNewTab);
-    }
-
-    function renderSessionTabs() {
-        if (!sessionTabsContainer) return;
-
-        if (openTabs.length === 0) {
-            sessionTabsContainer.innerHTML = '';
-            return;
-        }
-
-        sessionTabsContainer.innerHTML = openTabs.map(tab => `
-            <div class="session-tab ${tab.sessionId === activeTabId ? 'active' : ''}"
-                 data-session-id="${tab.sessionId}"
-                 draggable="true">
-                <span class="session-tab-title">${escapeHtml(tab.name || 'New Session')}</span>
-                <button class="session-tab-close" title="Close tab">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="18" y1="6" x2="6" y2="18"/>
-                        <line x1="6" y1="6" x2="18" y2="18"/>
-                    </svg>
-                </button>
-            </div>
-        `).join('');
-
-        // Add event listeners to tabs
-        sessionTabsContainer.querySelectorAll('.session-tab').forEach(tab => {
-            const sessionId = tab.dataset.sessionId;
-
-            // Tab click to switch
-            tab.addEventListener('click', (e) => {
-                if (!e.target.closest('.session-tab-close')) {
-                    switchToTab(sessionId);
-                }
-            });
-
-            // Close button
-            tab.querySelector('.session-tab-close')?.addEventListener('click', (e) => {
-                e.stopPropagation();
-                closeTab(sessionId);
-            });
-
-            // Tab drag events for reordering
-            tab.addEventListener('dragstart', (e) => {
-                tab.classList.add('dragging');
-                e.dataTransfer.setData('text/plain', sessionId);
-                e.dataTransfer.effectAllowed = 'move';
-            });
-
-            tab.addEventListener('dragend', () => {
-                tab.classList.remove('dragging');
-            });
-
-            tab.addEventListener('dragover', (e) => {
-                e.preventDefault();
-                const dragging = sessionTabsContainer.querySelector('.dragging');
-                if (dragging && dragging !== tab) {
-                    tab.classList.add('drag-over');
-                }
-            });
-
-            tab.addEventListener('dragleave', () => {
-                tab.classList.remove('drag-over');
-            });
-
-            tab.addEventListener('drop', (e) => {
-                e.preventDefault();
-                tab.classList.remove('drag-over');
-                const fromSessionId = e.dataTransfer.getData('text/plain');
-                const toSessionId = sessionId;
-                reorderTabs(fromSessionId, toSessionId);
-            });
-
-            // Double-click to rename (no-op, rename modal removed)
-
-        });
-    }
-
-    async function switchToTab(sessionId) {
-        if (sessionId === activeTabId) return;
-
-        // Use Claude Sessions system
-        await window.switchClaudeSession(sessionId);
-        activeTabId = sessionId;
-        renderSessionTabs();
-    }
-
-    async function addNewTab() {
-        // Delegate to Claude Sessions system to create a new session
-        await createNewClaudeSession();
-    }
-
-    function closeTab(sessionId) {
-        const tabIndex = openTabs.findIndex(t => t.sessionId === sessionId);
-        if (tabIndex === -1) return;
-
-        // Don't close the last tab
-        if (openTabs.length === 1) {
-            showToast('Info', 'Cannot close the last tab', 'info', 2000);
-            return;
-        }
-
-        // Remove tab
-        openTabs.splice(tabIndex, 1);
-        saveTabsToStorage();
-
-        // If we closed the active tab, switch to another
-        if (sessionId === activeTabId) {
-            const newActiveIndex = Math.min(tabIndex, openTabs.length - 1);
-            switchToTab(openTabs[newActiveIndex].sessionId);
-        } else {
-            renderSessionTabs();
-        }
-    }
-
-    function reorderTabs(fromSessionId, toSessionId) {
-        const fromIndex = openTabs.findIndex(t => t.sessionId === fromSessionId);
-        const toIndex = openTabs.findIndex(t => t.sessionId === toSessionId);
-
-        if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) return;
-
-        // Move tab
-        const [tab] = openTabs.splice(fromIndex, 1);
-        openTabs.splice(toIndex, 0, tab);
-
-        saveTabsToStorage();
-        renderSessionTabs();
-    }
-
-    // Update tab name when session is renamed
-    function updateTabName(sessionId, newName) {
-        const tab = openTabs.find(t => t.sessionId === sessionId);
-        if (tab) {
-            tab.name = newName;
-            saveTabsToStorage();
-            renderSessionTabs();
-        }
-    }
-
-    // Add session to tabs if not already present
-    function ensureTabExists(sessionId, name) {
-        if (!openTabs.find(t => t.sessionId === sessionId)) {
-            openTabs.push({ sessionId, name: name || 'New Session' });
-            saveTabsToStorage();
-            renderSessionTabs();
-        }
-    }
-
-    // Expose for other functions to use
-    window.updateTabName = updateTabName;
-    window.ensureTabExists = ensureTabExists;
 
     // ============================================
     // Toast Notifications
@@ -3788,9 +3543,6 @@
             });
         }
 
-        // Initialize modals
-        initModals();
-
         // Initialize edit modal
         initEditModal();
 
@@ -3836,9 +3588,6 @@
 
         // Claude sessions 列表在 WebSocket 连接后由 loadCurrentSessionMessages 加载
 
-        // Initialize session tabs
-        initSessionTabs();
-
         // 加载任务列表
         await loadTasks();
         renderDrawerTasks();
@@ -3849,9 +3598,6 @@
         if (taskRefreshBtn) {
             taskRefreshBtn.addEventListener('click', handleTaskRefresh);
         }
-
-        // 清理旧版 localStorage 消息缓存（已改为服务端加载）
-        clearStorage();
 
         // Connect WebSocket（连接后从服务端加载当前 session 消息）
         connectWebSocket();
