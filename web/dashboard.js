@@ -8,8 +8,10 @@ const state = {
     tools: [],
     mcpServers: [],
     availableTools: [],
+    tasks: [],
     selectedInstance: null,
     currentDetailInstance: null,
+    currentOutputTaskId: null,
     refreshInterval: null
 };
 
@@ -19,6 +21,7 @@ const elements = {
     healthyInstances: document.getElementById('healthyInstances'),
     processingInstances: document.getElementById('processingInstances'),
     stoppedInstances: document.getElementById('stoppedInstances'),
+    spawnTaskCount: document.getElementById('spawnTaskCount'),
     instancesGrid: document.getElementById('instancesGrid'),
     toolsGrid: document.getElementById('toolsGrid'),
     refreshBtn: document.getElementById('refreshBtn'),
@@ -58,7 +61,14 @@ const elements = {
     newInstanceId: document.getElementById('newInstanceId'),
     newConfigModel: document.getElementById('newConfigModel'),
     newConfigPermissionMode: document.getElementById('newConfigPermissionMode'),
-    newConfigMcpEnabled: document.getElementById('newConfigMcpEnabled')
+    newConfigMcpEnabled: document.getElementById('newConfigMcpEnabled'),
+    // Output Modal
+    outputModal: document.getElementById('outputModal'),
+    outputTaskId: document.getElementById('outputTaskId'),
+    outputContent: document.getElementById('outputContent'),
+    outputModalClose: document.getElementById('outputModalClose'),
+    outputRefreshBtn: document.getElementById('outputRefreshBtn'),
+    outputKillBtn: document.getElementById('outputKillBtn')
 };
 
 // API Functions
@@ -122,6 +132,18 @@ async function fetchAvailableTools() {
         return await response.json();
     } catch (error) {
         console.error('Error fetching available tools:', error);
+        return [];
+    }
+}
+
+async function fetchTasks() {
+    try {
+        const response = await fetch('/task/list');
+        if (!response.ok) throw new Error('Failed to fetch tasks');
+        const data = await response.json();
+        return data.tasks || [];
+    } catch (error) {
+        console.error('Error fetching tasks:', error);
         return [];
     }
 }
@@ -230,6 +252,7 @@ function updateSummary() {
     elements.healthyInstances.textContent = healthy;
     elements.processingInstances.textContent = processing;
     elements.stoppedInstances.textContent = stopped;
+    elements.spawnTaskCount.textContent = state.tasks.length;
 }
 
 function formatTimestamp(timestamp) {
@@ -254,8 +277,41 @@ function statusClass(instance) {
     return instance.is_processing ? 'processing' : instance.status;
 }
 
+function formatElapsed(registeredAt) {
+    const elapsed = Math.floor(Date.now() / 1000 - registeredAt);
+    if (elapsed < 60) return `${elapsed}s`;
+    if (elapsed < 3600) return `${Math.floor(elapsed / 60)}m`;
+    return `${Math.floor(elapsed / 3600)}h${Math.floor((elapsed % 3600) / 60)}m`;
+}
+
+function renderTasksForInstance(instanceId) {
+    const instanceTasks = state.tasks.filter(t => t.instance_id === instanceId);
+    if (instanceTasks.length === 0) return '';
+
+    const items = instanceTasks.map(task => `
+        <div class="card-task-item">
+            <span class="task-id" title="${escapeHtml(task.task_id)}">${escapeHtml(task.task_id)}</span>
+            <span class="task-status-badge ${task.status}">${task.status}</span>
+            <span class="task-desc" title="${escapeHtml(task.description || '')}">${escapeHtml((task.description || '').slice(0, 40))}</span>
+            <span class="task-elapsed">${formatElapsed(task.registered_at)}</span>
+            <div class="task-actions">
+                <button class="task-action-btn task-output-btn" data-task-id="${escapeHtml(task.task_id)}">输出</button>
+                <button class="task-action-btn danger task-kill-btn" data-task-id="${escapeHtml(task.task_id)}">终止</button>
+            </div>
+        </div>
+    `).join('');
+
+    return `
+        <div class="card-tasks">
+            <div class="card-tasks-title">子进程 (${instanceTasks.length})</div>
+            ${items}
+        </div>
+    `;
+}
+
 function createInstanceCard(instance) {
     const cls = statusClass(instance);
+    const tasksHtml = renderTasksForInstance(instance.instance_id);
     const card = document.createElement('div');
     card.className = 'instance-card';
     card.innerHTML = `
@@ -280,6 +336,7 @@ function createInstanceCard(instance) {
                 <span class="meta-value">${formatTimestamp(instance.last_active_at)}</span>
             </div>
         </div>
+        ${tasksHtml}
         <div class="card-actions">
             <button class="card-action action-message" data-id="${escapeHtml(instance.instance_id)}" ${instance.status === 'stopped' ? 'disabled' : ''}>
                 \u2709 \u6d88\u606f
@@ -296,7 +353,7 @@ function createInstanceCard(instance) {
     `;
 
     card.addEventListener('click', (e) => {
-        if (e.target.closest('.card-action') || e.target.closest('a')) return;
+        if (e.target.closest('.card-action') || e.target.closest('a') || e.target.closest('.task-action-btn')) return;
         openDetailModal(instance);
     });
 
@@ -310,6 +367,20 @@ function createInstanceCard(instance) {
     restartBtn?.addEventListener('click', (e) => {
         e.stopPropagation();
         handleRestart(instance.instance_id);
+    });
+
+    // Spawn task action buttons
+    card.querySelectorAll('.task-output-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openOutputModal(btn.dataset.taskId);
+        });
+    });
+    card.querySelectorAll('.task-kill-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            handleKillTask(btn.dataset.taskId);
+        });
     });
 
     return card;
@@ -435,17 +506,19 @@ async function handleRefresh() {
     if (svg) svg.style.animation = 'spin 0.6s linear infinite';
 
     try {
-        const [instances, tools, mcpServers, availableTools] = await Promise.all([
+        const [instances, tools, mcpServers, availableTools, tasks] = await Promise.all([
             fetchInstances(),
             fetchMCPTools(),
             fetchMCPServers(),
-            fetchAvailableTools()
+            fetchAvailableTools(),
+            fetchTasks()
         ]);
 
         state.instances = instances;
         state.tools = tools;
         state.mcpServers = mcpServers;
         state.availableTools = availableTools;
+        state.tasks = tasks;
 
         updateSummary();
         renderInstances();
@@ -668,6 +741,50 @@ async function handleCreateInstance() {
     }
 }
 
+// Output Modal
+async function openOutputModal(taskId) {
+    state.currentOutputTaskId = taskId;
+    elements.outputTaskId.textContent = taskId;
+    elements.outputContent.textContent = '加载中...';
+    elements.outputModal.classList.add('active');
+    await refreshOutput();
+}
+
+function closeOutputModal() {
+    state.currentOutputTaskId = null;
+    elements.outputModal.classList.remove('active');
+}
+
+async function refreshOutput() {
+    if (!state.currentOutputTaskId) return;
+    try {
+        const response = await fetch(`/api/spawn-tasks/${encodeURIComponent(state.currentOutputTaskId)}/output`);
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            elements.outputContent.textContent = err.detail || '获取输出失败';
+            return;
+        }
+        const data = await response.json();
+        elements.outputContent.textContent = data.output || '(无输出)';
+        elements.outputContent.scrollTop = elements.outputContent.scrollHeight;
+    } catch (error) {
+        elements.outputContent.textContent = `错误: ${error.message}`;
+    }
+}
+
+async function handleKillTask(taskId) {
+    if (!confirm(`确认终止子进程「${taskId}」？`)) return;
+    try {
+        const response = await fetch(`/api/spawn-tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
+        if (!response.ok) throw new Error('Failed to kill task');
+        // If output modal is open for this task, close it
+        if (state.currentOutputTaskId === taskId) closeOutputModal();
+        await handleRefresh();
+    } catch (error) {
+        alert(`终止失败：${error.message}`);
+    }
+}
+
 // Utilities
 function escapeHtml(text) {
     const div = document.createElement('div');
@@ -715,8 +832,19 @@ function init() {
         if (e.key === 'Enter') handleCreateInstance();
     });
 
+    // Output Modal
+    elements.outputModalClose.addEventListener('click', closeOutputModal);
+    elements.outputRefreshBtn.addEventListener('click', refreshOutput);
+    elements.outputKillBtn.addEventListener('click', () => {
+        if (state.currentOutputTaskId) handleKillTask(state.currentOutputTaskId);
+    });
+    elements.outputModal.addEventListener('click', (e) => {
+        if (e.target === elements.outputModal) closeOutputModal();
+    });
+
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
+            if (elements.outputModal.classList.contains('active')) closeOutputModal();
             if (elements.messageModal.classList.contains('active')) closeMessageModal();
             if (elements.instanceDetailModal.classList.contains('active')) closeDetailModal();
             if (elements.newInstanceModal.classList.contains('active')) closeNewInstanceModal();

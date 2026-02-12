@@ -4,8 +4,15 @@
   "mcp_enabled": true,
   "mcp_servers": ".mcp.json",
   "allowed_tools": [
-    "Read", "Write", "Edit", "Glob", "Grep", "Bash", "Task",
-    "TodoRead", "WebSearch", "WebFetch", "Skill"
+    "Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "Bash", "BashOutput",
+    "LS", "Task", "TodoRead", "TodoWrite", "NotebookRead", "NotebookEdit",
+    "WebSearch", "WebFetch", "Skill", "KillShell"
   ],
+  "cwd": "/Users/huang/Projects",
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,
+    "excludedCommands": ["git", "docker"]
+  },
   "subagents": []
 }

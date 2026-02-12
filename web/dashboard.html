@@ -74,6 +74,11 @@
                     <span class="stat-value" id="stoppedInstances">0</span>
                     <span class="stat-label">已停止</span>
                 </div>
+                <div class="stat-card">
+                    <span class="stat-dot dot-processing"></span>
+                    <span class="stat-value" id="spawnTaskCount">0</span>
+                    <span class="stat-label">子进程</span>
+                </div>
             </section>
 
             <!-- Instances Section -->
@@ -251,6 +256,23 @@
             <div class="modal-footer">
                 <button class="btn btn-ghost" id="newInstanceCancel">取消</button>
                 <button class="btn btn-primary" id="newInstanceCreate">创建</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Output Modal -->
+    <div class="modal-overlay" id="outputModal">
+        <div class="modal modal-lg">
+            <div class="modal-header">
+                <h3>子进程输出 · <span id="outputTaskId"></span></h3>
+                <button class="modal-close" id="outputModalClose">&times;</button>
+            </div>
+            <div class="modal-body">
+                <pre class="output-content" id="outputContent">加载中...</pre>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" id="outputRefreshBtn">↻ 刷新</button>
+                <button class="btn btn-danger" id="outputKillBtn">终止任务</button>
             </div>
         </div>
     </div>

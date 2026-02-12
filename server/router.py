@@ -54,7 +54,7 @@ class MessageRouter:
         return fallback
 
     async def _ensure_instance(self, route: dict):
-        """确保实例存在，不存在则按需创建（有历史 session 则 resume）"""
+        """确保实例存在，不存在则按需创建（有历史 session 则 resume，失败则新建）"""
         instance_id = route.get("instance_id")
         instance = self.agent_manager.get_instance(instance_id)
         if instance is not None:
@@ -66,10 +66,23 @@ class MessageRouter:
 
         if last_session_id:
             print(f"[Router] 按需恢复实例: {instance_id} (resume: {last_session_id[:8]}...)")
+            try:
+                return await self.agent_manager.create_instance(instance_id, resume_session=last_session_id)
+            except Exception as e:
+                print(f"[Router] resume 失败: {instance_id}: {e}")
+                print(f"[Router] 回退到新 session: {instance_id}")
+                self.agent_manager.clear_instance_config_key(instance_id, "last_session_id")
+                return await self.agent_manager.create_instance(instance_id, resume_session=None)
         else:
             print(f"[Router] 按需创建实例: {instance_id} (新 session)")
+            return await self.agent_manager.create_instance(instance_id, resume_session=None)
 
-        return await self.agent_manager.create_instance(instance_id, resume_session=last_session_id)
+    def get_channel_type_for_instance(self, instance_id: str) -> str:
+        """根据 routing.json 确定实例对应的 channel 类型"""
+        for route in self.routes:
+            if route.get("instance_id") == instance_id:
+                return route.get("channel", "websocket")
+        return "websocket"  # 默认 websocket
 
     async def route_message(self, channel: Channel, channel_type: str,
                              message: str, context: dict = None,

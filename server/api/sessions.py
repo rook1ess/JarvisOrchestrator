@@ -100,7 +100,9 @@ async def get_session_messages(session_id: str):
     sessions_dir = get_claude_sessions_dir()
     jsonl_file = sessions_dir / f"{session_id}.jsonl"
     if not jsonl_file.exists():
-        raise HTTPException(status_code=404, detail="Session file not found")
+        # JSONL 文件可能尚未创建（新 session 首次消息前）或已被清理
+        # 返回空消息列表而非 404，避免前端显示错误
+        return {"messages": []}
 
     messages = []
     try:

@@ -68,7 +68,7 @@ class TaskManager:
     # ---- CRUD ----
 
     def register(self, task_id: str, timeout_minutes: int, description: str = "",
-                 total_steps: int = 0, instance_id: str = None):
+                 total_steps: int = 0, instance_id: str = None, mode: str = None):
         task_info = {
             "task_id": task_id,
             "description": description,
@@ -80,6 +80,7 @@ class TaskManager:
             "total_steps": total_steps,
             "current_step": "",
             "instance_id": instance_id,  # 发起任务的实例
+            "mode": mode,  # "container" | "local" | None
         }
         self.tasks[task_id] = task_info
         self._save()
@@ -87,8 +88,8 @@ class TaskManager:
         return task_info
 
     async def register_async(self, task_id: str, timeout_minutes: int, description: str = "",
-                             total_steps: int = 0, instance_id: str = None):
-        task_info = self.register(task_id, timeout_minutes, description, total_steps, instance_id)
+                             total_steps: int = 0, instance_id: str = None, mode: str = None):
+        task_info = self.register(task_id, timeout_minutes, description, total_steps, instance_id, mode)
         await self._broadcast_task_update(task_info, "registered")
         return task_info
 
@@ -191,23 +192,72 @@ class TaskManager:
             tasks.append(task_copy)
         return tasks
 
+    def get_tasks_by_instance(self, instance_id: str) -> List[dict]:
+        """返回指定实例的所有任务"""
+        now = time.time()
+        tasks = []
+        for task in self.tasks.values():
+            if task.get("instance_id") != instance_id:
+                continue
+            task_copy = task.copy()
+            if task_copy["status"] == "running":
+                remaining = task_copy["expires_at"] - now
+                task_copy["remaining_seconds"] = max(0, int(remaining))
+            tasks.append(task_copy)
+        return tasks
+
     async def start_checker(self, on_timeout_callback):
         self._load()
+        # 启动时清理已超时的僵尸任务（服务器重启后可能残留）
+        self._cleanup_zombies()
 
         async def check_loop():
             while True:
                 await asyncio.sleep(30)
                 expired = self.get_expired_tasks()
                 for task in expired:
+                    task_id = task["task_id"]
                     task["status"] = "timeout"
                     self._archive(task)
+                    del self.tasks[task_id]  # 从活跃列表移除
                     self._save()
-                    print(f"[TaskManager] 任务超时: {task['task_id']}")
+                    print(f"[TaskManager] 任务超时并移除: {task_id}")
                     await self._broadcast_task_update(task, "timeout")
-                    await on_timeout_callback(task["task_id"], task["description"], task.get("instance_id"))
+                    await on_timeout_callback(task_id, task["description"], task.get("instance_id"))
+
+                # 定期清理 tmux 已死但任务仍在的孤儿
+                self._cleanup_dead_tmux()
 
         self._check_task = asyncio.create_task(check_loop())
         print("[TaskManager] 超时检查器已启动")
+
+    def _cleanup_zombies(self):
+        """清理 status 不是 running/blocked 的僵尸任务（历史 bug 残留）"""
+        zombies = [tid for tid, t in self.tasks.items() if t["status"] not in ("running", "blocked")]
+        for tid in zombies:
+            self._archive(self.tasks.pop(tid))
+            print(f"[TaskManager] 清理僵尸任务: {tid}")
+        if zombies:
+            self._save()
+
+    def _cleanup_dead_tmux(self):
+        """清理 tmux session 已不存在的任务（子进程已结束但未回调）"""
+        import subprocess
+        dead = []
+        for tid in list(self.tasks.keys()):
+            result = subprocess.run(
+                ["tmux", "has-session", "-t", tid],
+                capture_output=True, timeout=5,
+            )
+            if result.returncode != 0:
+                dead.append(tid)
+        for tid in dead:
+            task = self.tasks.pop(tid)
+            task["status"] = "dead_session"
+            self._archive(task)
+            print(f"[TaskManager] tmux 已消失，清理任务: {tid}")
+        if dead:
+            self._save()
 
     async def stop_checker(self):
         if self._check_task:

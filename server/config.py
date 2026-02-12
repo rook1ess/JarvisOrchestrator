@@ -78,8 +78,25 @@ AVAILABLE_TOOLS = [
 
 # ============== Claude Session 路径 ==============
 
+def _get_instance_cwd() -> Optional[str]:
+    """从 _default.json 读取实例 cwd（CLI 用此路径作为项目根，影响 session 存储位置）"""
+    default_file = INSTANCES_DIR / "_default.json"
+    if default_file.exists():
+        try:
+            with open(default_file, "r", encoding="utf-8") as f:
+                return json.load(f).get("cwd")
+        except Exception:
+            pass
+    return None
+
+
 def get_claude_sessions_dir() -> Path:
-    escaped_path = str(PROJECT_ROOT).replace("/", "-")
+    """获取 Claude session 存储目录。
+    当实例配置了 cwd 时，CLI 会以 cwd 作为项目根，session 存在对应目录下。
+    """
+    cwd = _get_instance_cwd()
+    base_path = cwd if cwd else str(PROJECT_ROOT)
+    escaped_path = base_path.replace("/", "-")
     return Path.home() / ".claude" / "projects" / escaped_path
 
 

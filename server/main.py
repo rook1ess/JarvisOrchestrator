@@ -38,8 +38,12 @@ async def _handle_timeout(task_id: str, description: str, instance_id: str = Non
         targets = list(agent_manager.get_all_instances().values())
 
     for inst in targets:
-        await inst.enqueue(message, source="timeout",
-                            response_callback=ws_channel.send_response)
+        channel_type = message_router.get_channel_type_for_instance(inst.instance_id)
+        if channel_type == "qq" and qq_channel:
+            callback = qq_channel.send_response
+        else:
+            callback = ws_channel.send_response
+        await inst.enqueue(message, source="timeout", response_callback=callback)
 
 
 async def _broadcast_for_tasks(data: dict):
@@ -76,8 +80,8 @@ app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 sessions.init(agent_manager, ws_channel)
 tasks.init(task_manager)
 status.init(agent_manager, task_manager, ws_channel, qq_channel, message_router)
-instances.init(agent_manager, ws_channel)
-mcp_init(agent_manager, ws_channel, task_manager)
+instances.init(agent_manager, ws_channel, qq_channel=qq_channel, message_router=message_router)
+mcp_init(agent_manager, ws_channel, task_manager, qq_channel=qq_channel, message_router=message_router)
 
 app.include_router(pages.router)
 app.include_router(sessions.router)

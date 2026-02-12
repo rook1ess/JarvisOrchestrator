@@ -14,12 +14,16 @@ router = APIRouter()
 
 _agent_manager = None
 _ws_channel = None
+_qq_channel = None
+_message_router = None
 
 
-def init(agent_manager, ws_channel):
-    global _agent_manager, _ws_channel
+def init(agent_manager, ws_channel, qq_channel=None, message_router=None):
+    global _agent_manager, _ws_channel, _qq_channel, _message_router
     _agent_manager = agent_manager
     _ws_channel = ws_channel
+    _qq_channel = qq_channel
+    _message_router = message_router
 
 
 class SendMessageRequest(BaseModel):
@@ -85,8 +89,12 @@ async def send_message(instance_id: str, req: SendMessageRequest):
     if not inst:
         raise HTTPException(status_code=404, detail=f"Instance '{instance_id}' not found or stopped")
 
-    # 根据实例类型选择回调渠道
+    # channel-aware 回调
     callback = _ws_channel.send_response if _ws_channel else None
+    if _message_router:
+        channel_type = _message_router.get_channel_type_for_instance(instance_id)
+        if channel_type == "qq" and _qq_channel:
+            callback = _qq_channel.send_response
 
     await inst.enqueue(req.message, source=req.source, response_callback=callback)
 

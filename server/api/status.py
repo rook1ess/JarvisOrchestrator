@@ -8,7 +8,7 @@ from server.tasks.models import CallbackData
 from server.config import (
     QQ_ALLOWED_USERS, QQ_ALLOWED_GROUPS, QQ_GROUP_AT_ONLY,
 )
-from server.channels.qq import parse_qq_message, qq_message_has_at_bot
+from server.channels.qq import parse_qq_message, qq_message_has_at_bot, download_image_as_base64, download_file_as_attachment
 
 router = APIRouter()
 
@@ -110,8 +110,12 @@ async def task_callback(data: CallbackData):
         return {"status": "ok", "message": "No active instance to notify"}
 
     for inst in targets:
-        # 根据实例类型选择回调渠道
-        callback = _ws_channel.send_response if _ws_channel else None
+        # channel-aware 回调
+        channel_type = _message_router.get_channel_type_for_instance(inst.instance_id) if _message_router else "websocket"
+        if channel_type == "qq" and _qq_channel:
+            callback = _qq_channel.send_response
+        else:
+            callback = _ws_channel.send_response if _ws_channel else None
         await inst.enqueue(message, source="callback", response_callback=callback)
 
     return {"status": "ok", "message": f"Callback delivered to {len(targets)} instance(s)"}
@@ -140,8 +144,8 @@ async def qq_webhook(request: Request):
         if not qq_message_has_at_bot(raw_message, self_id):
             return {"status": "ignored", "reason": "not mentioned"}
 
-    text = parse_qq_message(raw_message)
-    if not text:
+    text, image_urls, files = parse_qq_message(raw_message)
+    if not text and not image_urls and not files:
         return {"status": "ignored", "reason": "empty message"}
 
     if message_type == "group":
@@ -149,22 +153,49 @@ async def qq_webhook(request: Request):
     else:
         source = f"qq:private:{user_id}"
 
-    # 设置 QQ channel 上下文
+    # 解析路由以获取 instance_id
+    route = _message_router.resolve("qq", {"message_type": message_type, "source": source})
+    qq_instance_id = route.get("instance_id", "qq-default") if route else "qq-default"
+
+    # 设置 QQ channel 上下文（传入 instance_id 用于 last_active 记录）
     _qq_channel.set_context(
         source,
         user_id=user_id,
-        group_id=group_id if message_type == "group" else None
+        group_id=group_id if message_type == "group" else None,
+        instance_id=qq_instance_id,
     )
 
     sender = data.get("sender", {})
     nickname = sender.get("card") or sender.get("nickname") or str(user_id)
-    print(f"[QQ] 收到消息: [{message_type}] {nickname}: {text[:50]}")
+    img_hint = f" +{len(image_urls)}图" if image_urls else ""
+    file_hint = f" +{len(files)}文件" if files else ""
+    print(f"[QQ] 收到消息: [{message_type}] {nickname}: {text[:50]}{img_hint}{file_hint}")
+
+    # 下载图片和文件转 attachments
+    import asyncio
+    attachments = []
+
+    if image_urls:
+        img_results = await asyncio.gather(*[download_image_as_base64(url) for url in image_urls])
+        attachments.extend(r for r in img_results if r is not None)
+
+    if files:
+        file_results = await asyncio.gather(*[download_file_as_attachment(f["url"], f["name"]) for f in files])
+        attachments.extend(r for r in file_results if r is not None)
+        # 对于没有成功下载的文件，在文本中保留提示
+        for f, result in zip(files, file_results):
+            if result is None:
+                text = f'{text}\n[文件: {f["name"]}（不支持的格式或下载失败）]' if text else f'[文件: {f["name"]}（不支持的格式或下载失败）]'
+
+    if not attachments:
+        attachments = None
 
     # 通过路由发送消息
     await _message_router.route_message(
         channel=_qq_channel,
         channel_type="qq",
-        message=text,
+        message=text or "(发送了图片/文件)",
         context={"message_type": message_type, "source": source},
+        attachments=attachments,
     )
     return {"status": "ok"}

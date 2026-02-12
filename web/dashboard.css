@@ -222,7 +222,7 @@ input, select, textarea { font-family: inherit; }
 /* Stats Row */
 .stats-row {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 12px;
     padding: 24px 0 8px;
 }
@@ -768,6 +768,125 @@ input, select, textarea { font-family: inherit; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+
+/* Spawn Tasks (子进程列表) */
+.card-tasks {
+    margin-bottom: 16px;
+    padding: 10px 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+}
+
+.card-tasks-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 8px;
+}
+
+.card-task-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    font-size: 0.82rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.card-task-item:last-child {
+    border-bottom: none;
+}
+
+.task-id {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+    max-width: 100px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.task-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 7px;
+    border-radius: var(--radius-full);
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    flex-shrink: 0;
+}
+
+.task-status-badge.running { background: var(--healthy-bg); color: var(--healthy); }
+.task-status-badge.blocked { background: var(--processing-bg); color: var(--processing); }
+.task-status-badge.timeout { background: var(--danger-bg); color: var(--danger); }
+.task-status-badge.done { background: var(--stopped-bg); color: var(--stopped); }
+
+.task-desc {
+    flex: 1;
+    color: var(--text-tertiary);
+    font-size: 0.78rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.task-elapsed {
+    font-size: 0.75rem;
+    color: var(--text-tertiary);
+    font-family: var(--font-mono);
+    flex-shrink: 0;
+}
+
+.task-actions {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.task-action-btn {
+    padding: 2px 8px;
+    font-size: 0.72rem;
+    font-weight: 500;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-white);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all var(--transition);
+}
+
+.task-action-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.task-action-btn.danger:hover {
+    border-color: var(--danger);
+    color: var(--danger);
+}
+
+/* Output Modal Content */
+.output-content {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    line-height: 1.5;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    padding: 16px;
+    border-radius: var(--radius-md);
+    max-height: 60vh;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
 
 /* Responsive */
 @media (max-width: 768px) {

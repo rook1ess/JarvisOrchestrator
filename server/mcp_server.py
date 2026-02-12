@@ -17,6 +17,8 @@ mcp = FastMCP("jarvis", stateless_http=True)
 _agent_manager = None
 _ws_channel = None
 _task_manager = None
+_qq_channel = None
+_message_router = None
 
 # 浏览器管理器单例（lazy init）
 _browser_manager = BrowserManager()
@@ -27,11 +29,13 @@ HOST_PROJECTS = os.environ.get("JARVIS_HOST_PROJECTS", "/Users/huang/Projects")
 CONTAINER_WORKSPACE = os.environ.get("JARVIS_CONTAINER_WORKSPACE", "/home/claude/workspace")
 
 
-def init(agent_manager, ws_channel, task_manager=None):
-    global _agent_manager, _ws_channel, _task_manager
+def init(agent_manager, ws_channel, task_manager=None, qq_channel=None, message_router=None):
+    global _agent_manager, _ws_channel, _task_manager, _qq_channel, _message_router
     _agent_manager = agent_manager
     _ws_channel = ws_channel
     _task_manager = task_manager
+    _qq_channel = qq_channel
+    _message_router = message_router
 
 
 # ============== 实例发现与通信 ==============
@@ -66,12 +70,91 @@ async def jarvis_list_instances() -> list[dict]:
 
 @mcp.tool()
 async def jarvis_restart_instance(instance_id: str) -> dict:
-    """重启指定实例，重新加载配置。保留对话历史。用于配置变更后生效。"""
+    """重启指定实例，重新加载配置。保留对话历史。
+    如果目标实例正在处理消息（包括自身调用），重启会延迟到当前消息处理完成后执行。
+
+    Args:
+        instance_id: 要重启的实例 ID
+    """
     inst = _agent_manager.get_instance(instance_id)
     if not inst:
         return {"status": "error", "message": f"Instance '{instance_id}' not found"}
-    await inst.restart()
-    return {"status": "ok", "instance_id": instance_id}
+
+    if inst.is_processing:
+        # 实例正在处理消息（可能是自身调用），使用延迟重启避免死锁
+        inst.schedule_restart()
+        return {
+            "status": "scheduled",
+            "instance_id": instance_id,
+            "message": "Restart scheduled after current message completes",
+        }
+    else:
+        # 实例空闲，直接重启
+        await inst.restart()
+        return {"status": "ok", "instance_id": instance_id}
+
+
+@mcp.tool()
+async def jarvis_clear_session(instance_id: str = None) -> dict:
+    """清除当前对话上下文，开启全新会话。当前回复完成后自动执行。
+    调用后你的记忆将被清空，请在调用前完成所有需要的回复。
+
+    Args:
+        instance_id: 要清除的实例 ID，不传则清除调用者自身
+    """
+    # 获取所有实例，找到匹配的或正在处理的
+    if instance_id:
+        inst = _agent_manager.get_instance(instance_id)
+        if not inst:
+            return {"status": "error", "message": f"Instance '{instance_id}' not found"}
+    else:
+        # 找当前正在处理消息的实例（即调用者自身）
+        inst = None
+        for iid, i in _agent_manager.get_all_instances().items():
+            if i.is_processing:
+                inst = i
+                break
+        if not inst:
+            return {"status": "error", "message": "No active instance found"}
+
+    inst.schedule_clear()
+    return {
+        "status": "scheduled",
+        "instance_id": inst.instance_id,
+        "message": "Session will be cleared after current response completes",
+    }
+
+
+@mcp.tool()
+async def jarvis_toggle_mcp(
+    servers: dict[str, bool],
+    instance_id: str = None,
+) -> dict:
+    """开关 MCP 服务器，支持一次切换多个。变更在当前回复结束后自动重启生效。
+
+    Args:
+        servers: 服务器开关映射。True=启用, False=禁用。如 {"xiaohongshu": false, "github": true}
+        instance_id: 目标实例 ID，不传则自动检测调用者
+    """
+    if instance_id:
+        inst = _agent_manager.get_instance(instance_id)
+    else:
+        inst = None
+        for iid, i in _agent_manager.get_all_instances().items():
+            if i.is_processing:
+                inst = i
+                break
+
+    if not inst:
+        return {"status": "error", "message": "Instance not found"}
+
+    status = inst.toggle_mcp_servers(servers)
+    return {
+        "status": "scheduled",
+        "instance_id": inst.instance_id,
+        "message": "MCP changes will take effect after current response completes",
+        **status,
+    }
 
 
 @mcp.tool()
@@ -88,13 +171,51 @@ async def jarvis_send_message(instance_id: str, message: str) -> dict:
     if not inst:
         return {"status": "error", "message": f"Instance '{instance_id}' not found or stopped"}
 
+    # 根据实例的 channel 类型选择正确的回调
     callback = _ws_channel.send_response if _ws_channel else None
+    if _message_router:
+        channel_type = _message_router.get_channel_type_for_instance(instance_id)
+        if channel_type == "qq" and _qq_channel:
+            callback = _qq_channel.send_response
+
     await inst.enqueue(message, source="instance:mcp", response_callback=callback)
 
     return {
         "status": "queued",
         "queue_position": inst.message_queue.qsize(),
     }
+
+
+@mcp.tool()
+async def jarvis_send_to_qq(
+    message: str,
+    user_id: int = None,
+    group_id: int = None,
+    instance_id: str = None,
+) -> dict:
+    """直接向 QQ 用户或群发送消息，不经过实例处理。
+    可指定 user_id/group_id，或通过 instance_id 自动使用该实例最后对话的 QQ 用户。
+
+    Args:
+        message: 要发送的消息文本
+        user_id: QQ 用户 ID（私聊）
+        group_id: QQ 群 ID（群聊）
+        instance_id: 可选，自动获取该实例最后活跃的 QQ 目标
+    """
+    from server.channels.qq import send_qq_message
+
+    # 如果没指定具体目标，从 instance 的 last_active 推断
+    if not user_id and not group_id and instance_id and _qq_channel:
+        last = _qq_channel.get_last_active(instance_id)
+        if last:
+            user_id = last.get("user_id")
+            group_id = last.get("group_id")
+
+    if not user_id and not group_id:
+        return {"status": "error", "message": "Must specify user_id, group_id, or instance_id with QQ history"}
+
+    await send_qq_message(user_id=user_id, group_id=group_id, text=message)
+    return {"status": "ok", "sent_to": {"user_id": user_id, "group_id": group_id}}
 
 
 # ============== tmux 子进程管理 ==============
@@ -121,6 +242,71 @@ def _host_to_container_path(host_path: str) -> str:
     if host_path.startswith(HOST_PROJECTS):
         return host_path.replace(HOST_PROJECTS, CONTAINER_WORKSPACE, 1)
     return host_path
+
+
+def _wait_for_ready(task_id: str, timeout: int = 30, poll_interval: float = 2.0) -> dict:
+    """轮询 tmux 输出，等待 Claude 就绪或检测到确认提示并自动应答。
+
+    Returns: {"ready": True/False, "output": str, "auto_answered": list}
+    """
+    # 文本输入型提示：(检测模式, 自动应答内容)
+    TEXT_PROMPT_PATTERNS = [
+        ("Yes, proceed", "Yes, proceed"),      # trust dialog 选项
+        ("[Y/n]", "y"),                         # 通用 Y/n 提示
+        ("(y/N)", "y"),                         # 通用 y/N 提示
+        ("yes/no", "yes"),                      # yes/no 提示
+    ]
+    # 方向键选择型提示：(检测模式, 按键序列)
+    # Claude Code >= 2.1.39 的 --dangerously-skip-permissions 确认对话框
+    ARROW_PROMPT_PATTERNS = [
+        ("Yes, I accept", ["Down", "Enter"]),   # bypass permissions 确认
+    ]
+    # Claude 已就绪的标志：出现输入提示符
+    READY_PATTERNS = ["❯", "Claude Code", ">"]
+    # 排除误判：这些出现在对话框中，不算就绪
+    NOT_READY_PATTERNS = ["Yes, I accept", "No, exit", "Enter to confirm"]
+
+    auto_answered = []
+    output = ""
+    start = time.time()
+
+    while time.time() - start < timeout:
+        output = _run(f"tmux capture-pane -t {task_id} -p -S -30")
+        if not output:
+            time.sleep(poll_interval)
+            continue
+
+        # 检测方向键选择型对话框并自动应答
+        for pattern, keys in ARROW_PROMPT_PATTERNS:
+            if pattern in output and pattern not in [a[0] for a in auto_answered]:
+                for key in keys:
+                    subprocess.run(["tmux", "send-keys", "-t", task_id, key])
+                    time.sleep(0.5)
+                auto_answered.append((pattern, "arrow-select"))
+                time.sleep(2)
+                break
+
+        # 检测文本输入型提示并自动应答
+        for pattern, answer in TEXT_PROMPT_PATTERNS:
+            if pattern in output and pattern not in [a[0] for a in auto_answered]:
+                subprocess.run(["tmux", "send-keys", "-t", task_id, answer, "Enter"])
+                auto_answered.append((pattern, answer))
+                time.sleep(2)
+                break
+
+        # 检测就绪状态（排除对话框中的误判）
+        last_lines = output.strip().split("\n")[-5:]
+        last_text = "\n".join(last_lines)
+        if any(p in last_text for p in NOT_READY_PATTERNS):
+            # 还在对话框里，不算就绪
+            time.sleep(poll_interval)
+            continue
+        if any(p in last_text for p in READY_PATTERNS):
+            return {"ready": True, "output": output, "auto_answered": auto_answered}
+
+        time.sleep(poll_interval)
+
+    return {"ready": False, "output": output, "auto_answered": auto_answered}
 
 
 @mcp.tool()
@@ -187,7 +373,10 @@ async def jarvis_spawn_task(
 
             cmd = f'docker exec -it -e CLAUDE_CODE_OAUTH_TOKEN="{token}" {CONTAINER_NAME} bash -c "cd {container_dir} && claude --dangerously-skip-permissions"'
             subprocess.run(["tmux", "send-keys", "-t", task_id, cmd, "Enter"])
-            time.sleep(5)
+
+            readiness = _wait_for_ready(task_id, timeout=30)
+            if not readiness["ready"]:
+                return {"status": "error", "message": f"Claude did not become ready within 30s. Output: {readiness['output'][-300:]}"}
 
             callback_host = "host.docker.internal"
             noproxy = "--noproxy '*'"
@@ -197,22 +386,16 @@ async def jarvis_spawn_task(
                 "tmux", "new-session", "-d", "-s", task_id,
                 "-x", "200", "-y", "50", "-c", working_dir
             ])
-            subprocess.run(["tmux", "send-keys", "-t", task_id, "claude", "Enter"])
-            time.sleep(3)
+            subprocess.run(["tmux", "send-keys", "-t", task_id, "claude --dangerously-skip-permissions", "Enter"])
+
+            readiness = _wait_for_ready(task_id, timeout=20)
+            if not readiness["ready"]:
+                return {"status": "error", "message": f"Claude did not become ready within 20s. Output: {readiness['output'][-300:]}"}
 
             callback_host = "localhost"
             noproxy = ""
 
-        # 2. 发送测试消息
-        subprocess.run(["tmux", "send-keys", "-t", task_id, "hello", "Enter"])
-        time.sleep(10)
-
-        # 3. 检查是否就绪
-        output = _run(f"tmux capture-pane -t {task_id} -p -S -30")
-        if not output:
-            return {"status": "error", "message": "No output from tmux session, Claude may not have started"}
-
-        # 4. 构建完整 prompt（含 callback 协议）
+        # 2. 构建完整 prompt（含 callback 协议）
         inst_id = instance_id or ""
         noproxy_flag = f" {noproxy}" if noproxy else ""
         callback_protocol = f"""
@@ -239,6 +422,7 @@ curl{noproxy_flag} -X POST http://{callback_host}:{SERVER_PORT}/callback -H "Con
             "task_id": task_id,
             "mode": "container" if use_container else "local",
             "recent_output": final_output[-500:] if final_output else "",
+            "auto_answered_prompts": readiness.get("auto_answered", []),
         }
 
     result = await loop.run_in_executor(None, _do_spawn)
@@ -249,6 +433,7 @@ curl{noproxy_flag} -X POST http://{callback_host}:{SERVER_PORT}/callback -H "Con
             task_id, timeout_minutes,
             description=prompt[:100],
             instance_id=instance_id,
+            mode="container" if use_container else "local",
         )
         result["timeout_registered"] = True
 
