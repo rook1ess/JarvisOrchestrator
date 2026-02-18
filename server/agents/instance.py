@@ -419,6 +419,8 @@ class AgentInstance:
             await emit({"type": "user_message", "content": message, "source": source})
 
             system_status = self._build_system_status()
+            query_start = time.time()
+            print(f"[Agent:{self.instance_id}] 发送 query...")
 
             if attachments:
                 content_blocks = []
@@ -464,16 +466,29 @@ class AgentInstance:
                 full_message = f"{system_status}\n\n{message}"
                 await self.client.query(full_message)
 
+            msg_count = 0
+            last_msg_time = time.time()
             async for msg in self.client.receive_response():
+                now = time.time()
+                gap = now - last_msg_time
+                last_msg_time = now
+                msg_count += 1
+
                 if isinstance(msg, AssistantMessage):
+                    tool_names = [b.name for b in msg.content if isinstance(b, ToolUseBlock)]
+                    text_len = sum(len(b.text) for b in msg.content if isinstance(b, TextBlock))
+                    print(f"[Agent:{self.instance_id}] msg#{msg_count} AssistantMessage (text:{text_len}c tools:{tool_names}) +{gap:.1f}s")
                     for block in msg.content:
                         if isinstance(block, TextBlock):
                             await emit({"type": "text", "content": block.text})
                         elif isinstance(block, ToolUseBlock):
                             await emit({"type": "tool", "name": block.name, "input": block.input})
                 elif isinstance(msg, SystemMessage):
+                    print(f"[Agent:{self.instance_id}] msg#{msg_count} System:{msg.subtype} +{gap:.1f}s")
                     await emit({"type": "system", "subtype": msg.subtype, "data": msg.data})
                 elif isinstance(msg, ResultMessage):
+                    elapsed = now - query_start
+                    print(f"[Agent:{self.instance_id}] msg#{msg_count} Result (turns:{msg.num_turns} ${msg.total_cost_usd:.4f} {elapsed:.1f}s total)")
                     # 从 ResultMessage 捕获 session_id
                     if msg.session_id:
                         self.current_session_id = msg.session_id
