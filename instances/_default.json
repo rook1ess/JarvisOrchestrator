@@ -1,5 +1,5 @@
 {
-  "system_prompt_file": "prompts/default.md",
+  "system_prompt_file": "prompts/secretary.md",
   "model": "opus",
   "mcp_enabled": true,
   "mcp_servers": ".mcp.json",
@@ -10,9 +10,7 @@
   ],
   "cwd": "/Users/huang/Projects",
   "sandbox": {
-    "enabled": true,
-    "autoAllowBashIfSandboxed": true,
-    "excludedCommands": ["git", "docker"]
+    "enabled": false
   },
   "subagents": []
 }

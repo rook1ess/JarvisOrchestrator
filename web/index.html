@@ -89,6 +89,35 @@
                             <line x1="12" y1="15" x2="12" y2="3"/>
                         </svg>
                     </button>
+                    <div class="context-indicator-wrapper">
+                        <button class="header-action-btn" id="contextBtn" title="Context usage">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 2a10 10 0 1 0 10 10"/>
+                                <path d="M12 2v10l6.93 4"/>
+                            </svg>
+                        </button>
+                        <div class="context-popover" id="contextPopover">
+                            <div class="context-popover-title">Context Window</div>
+                            <div class="context-bar-wrapper">
+                                <div class="context-bar">
+                                    <div class="context-bar-fill" id="contextBarFill"></div>
+                                </div>
+                                <span class="context-bar-label" id="contextBarLabel">--</span>
+                            </div>
+                            <div class="context-stats" id="contextStats">
+                                <div class="context-stat-row">
+                                    <span>Input</span><span id="ctxInput">--</span>
+                                </div>
+                                <div class="context-stat-row">
+                                    <span>Output</span><span id="ctxOutput">--</span>
+                                </div>
+                                <div class="context-stat-row">
+                                    <span>Cache Read</span><span id="ctxCache">--</span>
+                                </div>
+                            </div>
+                            <button class="context-compact-btn" id="contextCompactBtn">Compact Context</button>
+                        </div>
+                    </div>
                 </div>
                 <div class="role-indicator" id="roleIndicator">
                     <span class="role-status" id="roleStatus">

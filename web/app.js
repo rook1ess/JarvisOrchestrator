@@ -1715,6 +1715,8 @@
                         if (cache_read) {
                             parts.push(`cache: ${cache_read.toLocaleString()}`);
                         }
+                        // Update context indicator
+                        updateContextUsage(data.usage);
                     }
                     if (data.cost_usd != null) {
                         parts.push(`$${data.cost_usd.toFixed(4)}`);
@@ -2574,6 +2576,94 @@
                 btn.classList.toggle('bookmarked', bookmarked);
             }
         });
+    }
+
+    // ============================================
+    // Context Indicator
+    // ============================================
+    // Context window size per model (input_tokens = current context size)
+    const MODEL_CONTEXT_WINDOWS = {
+        'opus': 200000,
+        'sonnet': 200000,
+        'haiku': 200000,
+        'claude-opus-4-6': 200000,
+        'claude-sonnet-4-6': 200000,
+        'claude-haiku-4-5': 200000,
+    };
+    const DEFAULT_CONTEXT_WINDOW = 200000;
+
+    let lastUsage = null;
+    let contextWindowSize = DEFAULT_CONTEXT_WINDOW;
+
+    function initContextIndicator() {
+        const btn = document.getElementById('contextBtn');
+        const popover = document.getElementById('contextPopover');
+        const compactBtn = document.getElementById('contextCompactBtn');
+        if (!btn || !popover) return;
+
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            popover.classList.toggle('open');
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!popover.contains(e.target) && e.target !== btn) {
+                popover.classList.remove('open');
+            }
+        });
+
+        compactBtn?.addEventListener('click', () => {
+            if (state.isLoading) return;
+            compactBtn.disabled = true;
+            compactBtn.textContent = 'Compacting...';
+            sendMessage('/compact');
+            popover.classList.remove('open');
+            setTimeout(() => {
+                compactBtn.disabled = false;
+                compactBtn.textContent = 'Compact Context';
+            }, 3000);
+        });
+
+        // Try to detect model from instance config
+        fetchContextWindowSize();
+    }
+
+    async function fetchContextWindowSize() {
+        try {
+            const resp = await fetch(`/api/instances/${currentInstance}/config`);
+            if (resp.ok) {
+                const data = await resp.json();
+                const model = data.merged_config?.model || 'sonnet';
+                contextWindowSize = MODEL_CONTEXT_WINDOWS[model] || DEFAULT_CONTEXT_WINDOW;
+            }
+        } catch (e) { /* ignore */ }
+    }
+
+    function updateContextUsage(usage) {
+        if (!usage) return;
+        lastUsage = usage;
+
+        // input_tokens = total tokens sent to API this turn = current context size
+        const contextUsed = usage.input_tokens || 0;
+        const out = usage.output_tokens || 0;
+        const cache = usage.cache_read_input_tokens || 0;
+        const pct = Math.min(100, (contextUsed / contextWindowSize) * 100);
+
+        const fill = document.getElementById('contextBarFill');
+        const label = document.getElementById('contextBarLabel');
+        const ctxInput = document.getElementById('ctxInput');
+        const ctxOutput = document.getElementById('ctxOutput');
+        const ctxCache = document.getElementById('ctxCache');
+
+        if (fill) {
+            fill.style.width = pct + '%';
+            fill.className = 'context-bar-fill' +
+                (pct > 80 ? ' critical' : pct > 60 ? ' warn' : '');
+        }
+        if (label) label.textContent = Math.round(pct) + '%';
+        if (ctxInput) ctxInput.textContent = contextUsed.toLocaleString();
+        if (ctxOutput) ctxOutput.textContent = out.toLocaleString();
+        if (ctxCache) ctxCache.textContent = cache.toLocaleString();
     }
 
     // ============================================
@@ -3646,6 +3736,9 @@
 
         // Export event listener
         exportBtn?.addEventListener('click', exportToMarkdown);
+
+        // Context indicator
+        initContextIndicator();
 
         // Observe for new messages to enhance code blocks
         const observer = new MutationObserver((mutations) => {

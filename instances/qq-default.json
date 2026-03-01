@@ -1,0 +1,29 @@
+{
+  "model": "opus",
+  "permission_mode": "bypassPermissions",
+  "mcp_enabled": true,
+  "mcp_servers_disabled": [
+    "media-crawler-mcp",
+    "feishu-mcp"
+  ],
+  "allowed_tools": [
+    "Read",
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "Glob",
+    "Grep",
+    "LS",
+    "Bash",
+    "BashOutput",
+    "KillShell",
+    "Task",
+    "TodoRead",
+    "TodoWrite",
+    "NotebookRead",
+    "NotebookEdit",
+    "WebSearch",
+    "WebFetch",
+    "Skill"
+  ]
+}

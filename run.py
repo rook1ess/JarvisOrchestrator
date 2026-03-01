@@ -1,6 +1,10 @@
 """入口：uvicorn 启动"""
 
+import os
 import uvicorn
+
+# 清除嵌套检测环境变量，允许在 Claude Code 终端内启动 SDK 子进程
+os.environ.pop("CLAUDECODE", None)
 from server.config import (
     SERVER_HOST, SERVER_PORT,
     NAPCAT_API_URL, QQ_ALLOWED_USERS, QQ_ALLOWED_GROUPS, QQ_GROUP_AT_ONLY,
