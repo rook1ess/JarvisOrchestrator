@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from server.config import WEB_DIR, SERVER_SESSION_ID
 from server.tasks.manager import TaskManager
+from server.tasks.scheduler import ScheduledTaskManager
 from server.agents.manager import AgentManager
 from server.channels.websocket import WebSocketChannel
 from server.channels.qq import QQChannel
@@ -21,6 +22,7 @@ _mcp_app = mcp_server.streamable_http_app()
 
 # ============== 全局组件 ==============
 task_manager = TaskManager()
+scheduler = ScheduledTaskManager()
 agent_manager = AgentManager()
 ws_channel = WebSocketChannel()
 qq_channel = QQChannel()
@@ -51,6 +53,25 @@ async def _broadcast_for_tasks(data: dict):
     await ws_channel.broadcast_all(data)
 
 
+async def _fire_scheduled(message: str, instance_id: str = None):
+    """定时任务触发回调：向目标实例发送消息"""
+    target_id = instance_id or "ws-default"
+    inst = agent_manager.get_instance(target_id)
+    if not inst:
+        # 按需创建实例
+        inst = await message_router._ensure_instance(target_id)
+    if not inst:
+        print(f"[Scheduler] 无法获取实例 {target_id}，跳过")
+        return
+
+    channel_type = message_router.get_channel_type_for_instance(target_id)
+    if channel_type == "qq" and qq_channel:
+        callback = qq_channel.send_response
+    else:
+        callback = ws_channel.send_response
+    await inst.enqueue(message, source="scheduler", response_callback=callback)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 启动
@@ -60,6 +81,7 @@ async def lifespan(app: FastAPI):
 
     task_manager.set_broadcast_callback(_broadcast_for_tasks)
     await task_manager.start_checker(_handle_timeout)
+    await scheduler.start(_fire_scheduled)
     await agent_manager.start_health_checker(interval=30, idle_timeout_minutes=message_router.idle_timeout_minutes)
 
     # 启动 MCP Server 的 session manager（StreamableHTTP 需要 task group 初始化）
@@ -68,6 +90,7 @@ async def lifespan(app: FastAPI):
 
     # 关闭
     await _browser_manager.close_all()
+    await scheduler.stop()
     await agent_manager.stop_health_checker()
     await task_manager.stop_checker()
     await agent_manager.stop_all()
@@ -81,7 +104,7 @@ sessions.init(agent_manager, ws_channel)
 tasks.init(task_manager)
 status.init(agent_manager, task_manager, ws_channel, qq_channel, message_router)
 instances.init(agent_manager, ws_channel, qq_channel=qq_channel, message_router=message_router)
-mcp_init(agent_manager, ws_channel, task_manager, qq_channel=qq_channel, message_router=message_router)
+mcp_init(agent_manager, ws_channel, task_manager, scheduler=scheduler, qq_channel=qq_channel, message_router=message_router)
 
 app.include_router(pages.router)
 app.include_router(sessions.router)

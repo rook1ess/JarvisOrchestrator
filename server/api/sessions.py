@@ -1,6 +1,7 @@
 """Claude Session 管理 API"""
 
 import json
+import re
 from fastapi import APIRouter, HTTPException
 from server.config import load_claude_sessions, get_session_title, get_claude_sessions_dir
 
@@ -95,38 +96,88 @@ async def activate_claude_session(session_id: str, instance_id: str = None):
     }
 
 
+_SYSTEM_STATUS_RE = re.compile(r"<system-status[^>]*>.*?</system-status>", re.DOTALL)
+
+
 @router.get("/api/claude-sessions/{session_id}/messages")
 async def get_session_messages(session_id: str):
     sessions_dir = get_claude_sessions_dir()
     jsonl_file = sessions_dir / f"{session_id}.jsonl"
     if not jsonl_file.exists():
-        # JSONL 文件可能尚未创建（新 session 首次消息前）或已被清理
-        # 返回空消息列表而非 404，避免前端显示错误
         return {"messages": []}
 
     messages = []
     try:
         with open(jsonl_file, "r", encoding="utf-8") as f:
             for line in f:
-                if line.strip():
-                    try:
-                        entry = json.loads(line)
-                        msg_type = entry.get("type")
-                        if msg_type == "user":
-                            content = entry.get("message", {}).get("content", "")
-                            if isinstance(content, list):
-                                text_parts = [p.get("text", "") for p in content if p.get("type") == "text"]
-                                content = "".join(text_parts)
-                            messages.append({"role": "user", "content": content})
-                        elif msg_type == "assistant":
-                            content = entry.get("message", {}).get("content", [])
-                            text_parts = []
-                            for block in content:
-                                if isinstance(block, dict) and block.get("type") == "text":
-                                    text_parts.append(block.get("text", ""))
-                            messages.append({"role": "assistant", "content": "".join(text_parts)})
-                    except json.JSONDecodeError:
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                msg_type = entry.get("type")
+
+                if msg_type == "user":
+                    # Skip internal tool results (not real user messages)
+                    if entry.get("message", {}).get("parent_tool_use_id"):
                         continue
+                    content = entry.get("message", {}).get("content", "")
+                    if isinstance(content, list):
+                        text_parts = [p.get("text", "") for p in content if p.get("type") == "text"]
+                        content = "".join(text_parts)
+                    # Strip <system-status> tags
+                    content = _SYSTEM_STATUS_RE.sub("", content).strip()
+                    if not content:
+                        continue
+                    msg = {"role": "user", "content": content}
+                    # Expose uuid as message_id for rewind
+                    if entry.get("uuid"):
+                        msg["message_id"] = entry["uuid"]
+                    messages.append(msg)
+
+                elif msg_type == "assistant":
+                    content_blocks = entry.get("message", {}).get("content", [])
+                    blocks = []
+                    text_parts = []
+                    for block in content_blocks:
+                        if not isinstance(block, dict):
+                            continue
+                        btype = block.get("type")
+                        if btype == "text":
+                            text_parts.append(block.get("text", ""))
+                            blocks.append({"type": "text", "text": block.get("text", "")})
+                        elif btype == "tool_use":
+                            blocks.append({
+                                "type": "tool_use",
+                                "name": block.get("name", ""),
+                                "id": block.get("id", ""),
+                                "input": block.get("input", {}),
+                            })
+                        elif btype == "thinking":
+                            blocks.append({"type": "thinking", "text": block.get("text", "")})
+                    messages.append({
+                        "role": "assistant",
+                        "content": "".join(text_parts),
+                        "blocks": blocks,
+                    })
+
+                elif msg_type == "result":
+                    # Attach stats to previous assistant message
+                    stats = {}
+                    if entry.get("usage"):
+                        stats["usage"] = entry["usage"]
+                    if entry.get("total_cost_usd") is not None:
+                        stats["cost_usd"] = entry["total_cost_usd"]
+                    if entry.get("duration_ms") is not None:
+                        stats["duration_ms"] = entry["duration_ms"]
+                    if entry.get("num_turns") is not None:
+                        stats["num_turns"] = entry["num_turns"]
+                    if stats and messages and messages[-1].get("role") == "assistant":
+                        messages[-1]["stats"] = stats
+
+                # Skip "summary", "system" types
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

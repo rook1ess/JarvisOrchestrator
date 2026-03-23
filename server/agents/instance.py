@@ -11,11 +11,13 @@ from claude_agent_sdk import (
     AssistantMessage,
     TextBlock,
     ToolUseBlock,
+    ToolResultBlock,
     ResultMessage,
     SystemMessage,
 )
+from claude_agent_sdk.types import StreamEvent
 
-from server.config import load_instance_config, build_subagents_dict, SERVER_PORT, get_claude_sessions_dir
+from server.config import load_instance_config, build_subagents_dict, SERVER_PORT, get_claude_sessions_dir, update_session_index
 from server.session_registry import session_registry
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -180,18 +182,30 @@ class AgentInstance:
         sandbox_config = config.get("sandbox")
         cwd = config.get("cwd")
 
+        permission_mode = config.get("permission_mode", "bypassPermissions")
+        # When bypassing permissions, all tools are available — skip whitelist
+        allowed_tools = [] if permission_mode == "bypassPermissions" else config.get("allowed_tools", [])
+
         options = ClaudeAgentOptions(
             system_prompt=config.get("system_prompt", ""),
-            allowed_tools=config.get("allowed_tools", []),
+            allowed_tools=allowed_tools,
             agents=subagents if subagents else None,
             mcp_servers=mcp_servers,
-            permission_mode=config.get("permission_mode", "bypassPermissions"),
+            permission_mode=permission_mode,
             model=config.get("model", "opus"),
             setting_sources=setting_sources,
             resume=resume_session,
             sandbox=sandbox_config,
             cwd=cwd,
+            include_partial_messages=True,
+            # 不设 CLAUDE_CONFIG_DIR，SDK 直接用 ~/.claude，session 与 CLI 共享
         )
+
+        # Optional resource limits from config
+        if config.get("max_turns"):
+            options.max_turns = config["max_turns"]
+        if config.get("max_budget_usd"):
+            options.max_budget_usd = config["max_budget_usd"]
 
         self._client_context = ClaudeSDKClient(options=options)
         self.client = await self._client_context.__aenter__()
@@ -340,6 +354,26 @@ class AgentInstance:
             servers[name] = "enabled" if name not in disabled else "disabled"
         return {"mcp_enabled": True, "servers": servers}
 
+    # ---- SDK Runtime API delegates ----
+
+    async def sdk_set_model(self, model: str):
+        """Switch model at runtime without restart"""
+        if self.client:
+            await self.client.set_model(model)
+            print(f"[Agent:{self.instance_id}] Model changed to: {model}")
+
+    async def sdk_get_mcp_status(self) -> dict | None:
+        """Get live MCP server connection status from SDK"""
+        if self.client:
+            return await self.client.get_mcp_status()
+        return None
+
+    async def sdk_rewind_files(self, user_message_id: str):
+        """Undo file changes to a checkpoint (user_message_id)"""
+        if self.client:
+            await self.client.rewind_files(user_message_id)
+            print(f"[Agent:{self.instance_id}] Files rewound to: {user_message_id}")
+
     async def _queue_worker(self):
         print(f"[Agent:{self.instance_id}] 队列处理器已启动")
         while True:
@@ -468,30 +502,90 @@ class AgentInstance:
 
             msg_count = 0
             last_msg_time = time.time()
+            streaming_text_sent = False  # Track if text was sent via streaming deltas
+
             async for msg in self.client.receive_response():
                 now = time.time()
                 gap = now - last_msg_time
                 last_msg_time = now
                 msg_count += 1
 
-                if isinstance(msg, AssistantMessage):
+                if isinstance(msg, StreamEvent):
+                    event = msg.event
+                    event_type = event.get("type", "")
+
+                    if event_type == "content_block_start":
+                        block = event.get("content_block", {})
+                        block_type = block.get("type", "")
+                        if block_type == "tool_use":
+                            await emit({"type": "tool_start", "name": block.get("name", ""), "id": block.get("id", "")})
+                        elif block_type == "text":
+                            await emit({"type": "text_start"})
+
+                    elif event_type == "content_block_delta":
+                        delta = event.get("delta", {})
+                        delta_type = delta.get("type", "")
+                        if delta_type == "text_delta":
+                            streaming_text_sent = True
+                            await emit({"type": "text_delta", "content": delta.get("text", "")})
+                        elif delta_type == "thinking_delta":
+                            await emit({"type": "thinking_delta", "content": delta.get("thinking", "")})
+
+                    elif event_type == "content_block_stop":
+                        await emit({"type": "block_stop"})
+
+                elif isinstance(msg, AssistantMessage):
                     tool_names = [b.name for b in msg.content if isinstance(b, ToolUseBlock)]
                     text_len = sum(len(b.text) for b in msg.content if isinstance(b, TextBlock))
                     print(f"[Agent:{self.instance_id}] msg#{msg_count} AssistantMessage (text:{text_len}c tools:{tool_names}) +{gap:.1f}s")
                     for block in msg.content:
                         if isinstance(block, TextBlock):
-                            await emit({"type": "text", "content": block.text})
+                            # Only send full text if streaming didn't already send it
+                            if not streaming_text_sent:
+                                await emit({"type": "text", "content": block.text})
                         elif isinstance(block, ToolUseBlock):
                             await emit({"type": "tool", "name": block.name, "input": block.input})
+                        elif isinstance(block, ToolResultBlock):
+                            content_preview = ""
+                            if isinstance(block.content, str):
+                                content_preview = block.content[:200]
+                            elif isinstance(block.content, list):
+                                for item in block.content:
+                                    if isinstance(item, dict) and item.get("type") == "text":
+                                        content_preview = item.get("text", "")[:200]
+                                        break
+                            await emit({
+                                "type": "tool_result",
+                                "tool_use_id": block.tool_use_id,
+                                "is_error": block.is_error or False,
+                                "content_preview": content_preview,
+                            })
+                    # Reset streaming flag for next turn
+                    streaming_text_sent = False
+
                 elif isinstance(msg, SystemMessage):
                     print(f"[Agent:{self.instance_id}] msg#{msg_count} System:{msg.subtype} +{gap:.1f}s")
-                    await emit({"type": "system", "subtype": msg.subtype, "data": msg.data})
+                    if msg.subtype == "init":
+                        # Capture session_id early from init message
+                        init_data = msg.data if isinstance(msg.data, dict) else {}
+                        if init_data.get("session_id"):
+                            self.current_session_id = init_data["session_id"]
+                        await emit({
+                            "type": "init",
+                            "session_id": init_data.get("session_id"),
+                            "model": init_data.get("model"),
+                            "version": init_data.get("version"),
+                            "tools": init_data.get("tools"),
+                            "mcp_servers": init_data.get("mcp_servers"),
+                        })
+                    else:
+                        await emit({"type": "system", "subtype": msg.subtype, "data": msg.data})
                 elif isinstance(msg, ResultMessage):
                     elapsed = now - query_start
                     print(f"[Agent:{self.instance_id}] msg#{msg_count} Result (turns:{msg.num_turns} ${msg.total_cost_usd:.4f} {elapsed:.1f}s total)")
-                    # 从 ResultMessage 捕获 session_id
                     if msg.session_id:
                         self.current_session_id = msg.session_id
+                        update_session_index(msg.session_id, first_prompt=message, message_count=msg.num_turns)
                     await emit({
                         "type": "result",
                         "session_id": msg.session_id,

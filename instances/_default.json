@@ -8,7 +8,7 @@
     "LS", "Task", "TodoRead", "TodoWrite", "NotebookRead", "NotebookEdit",
     "WebSearch", "WebFetch", "Skill", "KillShell"
   ],
-  "cwd": "/Users/huang/Projects",
+  "cwd": "/Users/huang/Projects/Jarvis-Work",
   "sandbox": {
     "enabled": false
   },

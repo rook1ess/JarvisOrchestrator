@@ -80,19 +80,24 @@ async def restart_server():
 
 @router.post("/callback")
 async def task_callback(data: CallbackData):
-    """接收子进程回调，通知指定实例或所有活跃实例"""
+    """接收子进程回调，更新 TaskManager 状态并通知父实例"""
     print(f"[Callback] 收到子进程汇报: task={data.task_id}, status={data.status}, instance={data.instance_id or 'all'}")
 
     if data.status == "progress":
-        progress_info = f"progress={data.progress}" if data.progress else ""
-        step_info = f"step={data.current_step}" if data.current_step else ""
-        print(f"[Callback] 任务 {data.task_id} 进度汇报: {progress_info} {step_info}")
-        return {"status": "ok", "message": f"Progress noted for task {data.task_id}"}
+        # 仅更新进度，不需要通知父实例
+        if _task_manager:
+            await _task_manager.update_progress_async(data.task_id, data.progress, data.current_step)
+        return {"status": "ok", "message": f"Progress updated for task {data.task_id}"}
 
-    # 构建通知消息
     if data.status == "done":
-        message = f"[子进程汇报] 任务 {data.task_id} 报告已完成当前阶段任务。请确认当前所处步骤/剩余步骤，并下发下一阶段任务。若已经完成所有步骤，将当前任务标记为 done。"
+        # 子进程报告完成当前阶段 → 续期任务（保持活跃），等待父实例决策
+        if _task_manager:
+            await _task_manager.renew_async(data.task_id)
+        message = f"[子进程汇报] 任务 {data.task_id} 报告已完成当前阶段任务。请确认当前所处步骤/剩余步骤，并下发下一阶段任务。若已经完成所有步骤，使用 jarvis_complete_task 将任务标记为完成。"
     elif data.status == "blocked":
+        # 子进程报告阻塞 → 标记任务为 blocked
+        if _task_manager:
+            await _task_manager.block_async(data.task_id, data.reason or "")
         message = f"[子进程汇报] 任务 {data.task_id} 报告遇到阻塞: {data.reason}。请核实并决定下一步。"
     else:
         return {"status": "ok", "message": f"Callback received for task {data.task_id}"}
@@ -102,7 +107,6 @@ async def task_callback(data: CallbackData):
         targets = [_agent_manager.get_instance(data.instance_id)] if _agent_manager else []
         targets = [t for t in targets if t is not None]
     else:
-        # 通知所有活跃实例
         targets = list(_agent_manager.get_all_instances().values()) if _agent_manager else []
 
     if not targets:
@@ -110,7 +114,6 @@ async def task_callback(data: CallbackData):
         return {"status": "ok", "message": "No active instance to notify"}
 
     for inst in targets:
-        # channel-aware 回调
         channel_type = _message_router.get_channel_type_for_instance(inst.instance_id) if _message_router else "websocket"
         if channel_type == "qq" and _qq_channel:
             callback = _qq_channel.send_response

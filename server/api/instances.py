@@ -31,6 +31,14 @@ class SendMessageRequest(BaseModel):
     source: str = "api"
 
 
+class SetModelRequest(BaseModel):
+    model: str
+
+
+class RewindRequest(BaseModel):
+    user_message_id: str
+
+
 class InstanceConfigUpdate(BaseModel):
     model: Optional[str] = None
     permission_mode: Optional[str] = None
@@ -229,6 +237,45 @@ async def delete_instance(instance_id: str):
     _agent_manager.clear_instance_config_key(instance_id, "last_session_id")
 
     return {"status": "deleted", "instance_id": instance_id}
+
+
+@router.post("/api/instances/{instance_id}/model")
+async def set_instance_model(instance_id: str, req: SetModelRequest):
+    """运行时切换模型，无需重启"""
+    inst = _agent_manager.get_instance(instance_id)
+    if not inst:
+        raise HTTPException(status_code=404, detail=f"Instance '{instance_id}' not found")
+    try:
+        await inst.sdk_set_model(req.model)
+        return {"status": "ok", "instance_id": instance_id, "model": req.model}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/instances/{instance_id}/mcp-status")
+async def get_instance_mcp_status(instance_id: str):
+    """获取 MCP 服务器实时连接状态"""
+    inst = _agent_manager.get_instance(instance_id)
+    if not inst:
+        raise HTTPException(status_code=404, detail=f"Instance '{instance_id}' not found")
+    try:
+        result = await inst.sdk_get_mcp_status()
+        return {"status": "ok", "instance_id": instance_id, "mcp_status": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/instances/{instance_id}/rewind")
+async def rewind_instance(instance_id: str, req: RewindRequest):
+    """回退到指定消息时的文件状态。传入 user_message_id（来自消息历史的 message_id 字段）"""
+    inst = _agent_manager.get_instance(instance_id)
+    if not inst:
+        raise HTTPException(status_code=404, detail=f"Instance '{instance_id}' not found")
+    try:
+        await inst.sdk_rewind_files(req.user_message_id)
+        return {"status": "ok", "instance_id": instance_id, "rewound_to": req.user_message_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/api/mcp-servers")

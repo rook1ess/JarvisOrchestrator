@@ -17,6 +17,7 @@ mcp = FastMCP("jarvis", stateless_http=True)
 _agent_manager = None
 _ws_channel = None
 _task_manager = None
+_scheduler = None
 _qq_channel = None
 _message_router = None
 
@@ -25,17 +26,28 @@ _browser_manager = BrowserManager()
 
 # 容器配置（可通过环境变量覆盖）
 CONTAINER_NAME = os.environ.get("JARVIS_CONTAINER_NAME", "claude-dev")
-HOST_PROJECTS = os.environ.get("JARVIS_HOST_PROJECTS", "/Users/huang/Projects")
+HOST_PROJECTS = os.environ.get("JARVIS_HOST_PROJECTS", "/Users/huang/Projects/Jarvis-Work")
 CONTAINER_WORKSPACE = os.environ.get("JARVIS_CONTAINER_WORKSPACE", "/home/claude/workspace")
 
 
-def init(agent_manager, ws_channel, task_manager=None, qq_channel=None, message_router=None):
-    global _agent_manager, _ws_channel, _task_manager, _qq_channel, _message_router
+def init(agent_manager, ws_channel, task_manager=None, scheduler=None, qq_channel=None, message_router=None):
+    global _agent_manager, _ws_channel, _task_manager, _scheduler, _qq_channel, _message_router
     _agent_manager = agent_manager
     _ws_channel = ws_channel
     _task_manager = task_manager
+    _scheduler = scheduler
     _qq_channel = qq_channel
     _message_router = message_router
+
+
+def _resolve_instance(instance_id: str = None):
+    """解析实例：传 instance_id 则查找，否则自动检测当前正在处理消息的实例（即调用者自身）"""
+    if instance_id:
+        return _agent_manager.get_instance(instance_id)
+    for iid, inst in _agent_manager.get_all_instances().items():
+        if inst.is_processing:
+            return inst
+    return None
 
 
 # ============== 实例发现与通信 ==============
@@ -313,7 +325,8 @@ def _wait_for_ready(task_id: str, timeout: int = 30, poll_interval: float = 2.0)
 async def jarvis_spawn_task(
     task_id: str,
     prompt: str,
-    working_dir: str = "/Users/huang/Projects",
+    description: str = "",
+    working_dir: str = HOST_PROJECTS,
     timeout_minutes: int = 15,
     use_container: bool = True,
     instance_id: str = None,
@@ -323,7 +336,8 @@ async def jarvis_spawn_task(
 
     Args:
         task_id: 任务唯一标识，也用作 tmux session 名
-        prompt: 发送给子 Claude 的完整任务描述
+        prompt: 发送给子 Claude 的完整任务描述（prompt 内容）
+        description: 任务简短描述（用于前端展示），不传则自动截取 prompt 前 100 字符
         working_dir: 宿主机上的工作目录绝对路径
         timeout_minutes: 超时分钟数，到期后服务器会自动提醒检查
         use_container: True 用 Docker 容器模式（推荐），False 用本地模式
@@ -431,9 +445,10 @@ curl{noproxy_flag} -X POST http://{callback_host}:{SERVER_PORT}/callback -H "Con
     if result.get("status") == "ok" and _task_manager:
         await _task_manager.register_async(
             task_id, timeout_minutes,
-            description=prompt[:100],
+            description=description or prompt[:100],
             instance_id=instance_id,
             mode="container" if use_container else "local",
+            prompt=prompt,
         )
         result["timeout_registered"] = True
 
@@ -556,6 +571,96 @@ async def jarvis_list_tasks() -> dict:
         "tmux_sessions": tmux_sessions,
         "registered_tasks": registered_tasks,
     }
+
+
+# ============== 任务完成 ==============
+
+@mcp.tool()
+async def jarvis_complete_task(task_id: str, kill_tmux: bool = True) -> dict:
+    """标记任务为已完成并归档。这是唯一将任务标记为"完成"的方式——由父实例主动调用。
+    可选同时终止对应的 tmux session。
+
+    Args:
+        task_id: 任务 ID
+        kill_tmux: 是否同时终止 tmux session，默认 True
+    """
+    if not _task_manager:
+        return {"status": "error", "message": "TaskManager not available"}
+
+    task_info = await _task_manager.complete_async(task_id)
+    if not task_info:
+        return {"status": "error", "message": f"Task '{task_id}' not found in active tasks"}
+
+    tmux_killed = False
+    if kill_tmux:
+        loop = asyncio.get_event_loop()
+        def _kill():
+            result = subprocess.run(
+                ["tmux", "kill-session", "-t", task_id], capture_output=True
+            )
+            return result.returncode == 0
+        tmux_killed = await loop.run_in_executor(None, _kill)
+
+    return {
+        "status": "ok",
+        "task_id": task_id,
+        "task_completed": True,
+        "tmux_killed": tmux_killed,
+    }
+
+
+# ============== 定时任务 ==============
+
+@mcp.tool()
+async def jarvis_schedule_task(
+    schedule_id: str,
+    expression: str,
+    message: str,
+    instance_id: str = None,
+) -> dict:
+    """注册定时/周期/延迟任务。
+
+    支持三种表达式格式:
+    - Cron: "0 9 * * *" (每天 9 点)
+    - Interval: "every 5 minutes" / "every 1 hour"
+    - One-shot: "after 30 minutes" / "after 2 hours"
+
+    Args:
+        schedule_id: 任务唯一标识
+        expression: 调度表达式
+        message: 触发时发送给目标实例的消息内容
+        instance_id: 目标实例 ID，不传则默认 ws-default
+    """
+    if not _scheduler:
+        return {"status": "error", "message": "Scheduler not available"}
+    try:
+        task = _scheduler.register(schedule_id, expression, message, instance_id)
+        return {"status": "ok", "task": task}
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool()
+async def jarvis_list_scheduled_tasks() -> dict:
+    """列出所有定时任务及其状态。"""
+    if not _scheduler:
+        return {"status": "error", "message": "Scheduler not available"}
+    return {"status": "ok", "tasks": _scheduler.list_all()}
+
+
+@mcp.tool()
+async def jarvis_cancel_scheduled_task(schedule_id: str) -> dict:
+    """取消指定的定时任务。
+
+    Args:
+        schedule_id: 要取消的任务 ID
+    """
+    if not _scheduler:
+        return {"status": "error", "message": "Scheduler not available"}
+    task = _scheduler.cancel(schedule_id)
+    if not task:
+        return {"status": "error", "message": f"Scheduled task '{schedule_id}' not found"}
+    return {"status": "ok", "cancelled": task}
 
 
 # ============== 浏览器自动化 ==============

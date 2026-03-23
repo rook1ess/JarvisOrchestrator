@@ -68,7 +68,8 @@ class TaskManager:
     # ---- CRUD ----
 
     def register(self, task_id: str, timeout_minutes: int, description: str = "",
-                 total_steps: int = 0, instance_id: str = None, mode: str = None):
+                 total_steps: int = 0, instance_id: str = None, mode: str = None,
+                 prompt: str = None):
         task_info = {
             "task_id": task_id,
             "description": description,
@@ -82,14 +83,17 @@ class TaskManager:
             "instance_id": instance_id,  # 发起任务的实例
             "mode": mode,  # "container" | "local" | None
         }
+        if prompt:
+            task_info["prompt"] = prompt
         self.tasks[task_id] = task_info
         self._save()
         print(f"[TaskManager] 注册任务: {task_id} (超时: {timeout_minutes}分钟)")
         return task_info
 
     async def register_async(self, task_id: str, timeout_minutes: int, description: str = "",
-                             total_steps: int = 0, instance_id: str = None, mode: str = None):
-        task_info = self.register(task_id, timeout_minutes, description, total_steps, instance_id, mode)
+                             total_steps: int = 0, instance_id: str = None, mode: str = None,
+                             prompt: str = None):
+        task_info = self.register(task_id, timeout_minutes, description, total_steps, instance_id, mode, prompt=prompt)
         await self._broadcast_task_update(task_info, "registered")
         return task_info
 
@@ -133,6 +137,7 @@ class TaskManager:
         if task_id in self.tasks:
             self.tasks[task_id]["status"] = "blocked"
             self.tasks[task_id]["block_reason"] = reason
+            self.tasks[task_id]["blocked_at"] = time.time()
             self._save()
             print(f"[TaskManager] 任务阻塞: {task_id} - {reason}")
             return self.tasks[task_id]
@@ -150,6 +155,9 @@ class TaskManager:
             minutes = extra_minutes or task.get("timeout_minutes", 20)
             task["expires_at"] = time.time() + minutes * 60
             task["status"] = "running"
+            # Clear blocked state when transitioning back to running
+            task.pop("blocked_at", None)
+            task.pop("block_reason", None)
             self._save()
             print(f"[TaskManager] 任务续期: {task_id} (+{minutes}分钟)")
             return task
@@ -178,10 +186,18 @@ class TaskManager:
 
     def get_expired_tasks(self) -> List[dict]:
         now = time.time()
-        return [info for info in self.tasks.values()
-                if info["status"] == "running" and now > info["expires_at"]]
+        expired = []
+        for info in self.tasks.values():
+            if info["status"] == "running" and now > info["expires_at"]:
+                expired.append(info)
+            elif info["status"] == "blocked" and info.get("blocked_at"):
+                # Blocked tasks expire after 2x original timeout from blocked_at
+                blocked_timeout = info.get("timeout_minutes", 20) * 2 * 60
+                if now > info["blocked_at"] + blocked_timeout:
+                    expired.append(info)
+        return expired
 
-    def get_all_tasks(self) -> List[dict]:
+    def get_all_tasks(self, check_tmux: bool = False) -> List[dict]:
         now = time.time()
         tasks = []
         for task in self.tasks.values():
@@ -189,6 +205,13 @@ class TaskManager:
             if task_copy["status"] == "running":
                 remaining = task_copy["expires_at"] - now
                 task_copy["remaining_seconds"] = max(0, int(remaining))
+            if check_tmux and task_copy.get("mode") in ("container", "local"):
+                import subprocess
+                result = subprocess.run(
+                    ["tmux", "has-session", "-t", task_copy["task_id"]],
+                    capture_output=True, timeout=3,
+                )
+                task_copy["tmux_alive"] = result.returncode == 0
             tasks.append(task_copy)
         return tasks
 

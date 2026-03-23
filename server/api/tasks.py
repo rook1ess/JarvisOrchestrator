@@ -32,7 +32,9 @@ async def register_task(data: TaskRegisterData):
 
 @router.get("/task/list")
 async def list_tasks():
-    return {"tasks": _task_manager.get_all_tasks()}
+    loop = asyncio.get_event_loop()
+    tasks = await loop.run_in_executor(None, lambda: _task_manager.get_all_tasks(check_tmux=True))
+    return {"tasks": tasks}
 
 
 @router.put("/task/{task_id}/progress")

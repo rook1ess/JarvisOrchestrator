@@ -32,4 +32,4 @@ if __name__ == "__main__":
         print(f"    群聊仅@响应: {QQ_GROUP_AT_ONLY}")
     print("=" * 50 + "\n")
 
-    uvicorn.run("server.main:app", host=SERVER_HOST, port=SERVER_PORT, reload=True)
+    uvicorn.run("server.main:app", host=SERVER_HOST, port=SERVER_PORT)

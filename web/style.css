@@ -848,6 +848,32 @@ body::after {
     height: 14px;
 }
 
+.task-tmux {
+    font-size: 10px;
+    line-height: 1;
+}
+
+.task-tmux.alive {
+    color: var(--status-success, #22c55e);
+}
+
+.task-tmux.dead {
+    color: var(--status-error, #ef4444);
+}
+
+.drawer-task-tmux {
+    font-size: 10px;
+    font-family: var(--font-mono);
+}
+
+.drawer-task-tmux.alive {
+    color: var(--status-success, #22c55e);
+}
+
+.drawer-task-tmux.dead {
+    color: var(--status-error, #ef4444);
+}
+
 /* ============================================
    Search Bar
    ============================================ */
@@ -1627,6 +1653,58 @@ body::after {
     overflow-x: auto;
     max-height: 200px;
     overflow-y: auto;
+}
+
+/* Collapsible tool summary */
+.tools-container .tools-summary {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    font-size: 12px;
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+    border-radius: var(--radius-sm);
+    background-color: var(--bg-tertiary);
+    margin-bottom: 6px;
+}
+
+.tools-container .tools-summary:hover {
+    color: var(--text-secondary);
+    background-color: var(--bg-hover);
+}
+
+.tools-container .tools-toggle {
+    font-size: 10px;
+    width: 14px;
+    text-align: center;
+}
+
+.tools-container .tools-list {
+    display: none;
+    padding: 2px 10px 6px 24px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.tools-container.expanded .tools-list {
+    display: block;
+}
+
+.tools-container .tools-list-item {
+    padding: 1px 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+}
+
+.tools-container .tool-count-badge {
+    color: var(--text-muted);
+    font-size: 10px;
+}
+
+.tools-container.has-error .tools-summary {
+    color: var(--status-error);
 }
 
 /* ============================================
@@ -3227,6 +3305,57 @@ body::after {
     font-size: 13px;
     color: var(--text-secondary);
     margin-bottom: 8px;
+}
+
+.drawer-task-prompt-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    padding: 2px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-bottom: 6px;
+    user-select: none;
+    transition: color var(--transition-fast);
+}
+
+.drawer-task-prompt-tag:hover {
+    color: var(--text-primary);
+}
+
+.drawer-task-prompt-tag svg {
+    transition: transform var(--transition-fast);
+}
+
+.drawer-task-prompt-tag.open svg {
+    transform: rotate(90deg);
+}
+
+.drawer-task-prompt {
+    display: none;
+    margin-bottom: 8px;
+}
+
+.drawer-task-prompt.expanded {
+    display: block;
+}
+
+.drawer-task-prompt pre {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin: 4px 0 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 300px;
+    overflow-y: auto;
 }
 
 .drawer-task-progress {

@@ -81,11 +81,85 @@
             elements.messagesWrapper.innerHTML = '';
             state.messages = [];
 
-            msgData.messages.forEach(msg => {
-                const type = msg.role === 'user' ? 'user' : 'assistant';
-                const messageEl = createMessageElement(type, msg.content);
-                elements.messagesWrapper.appendChild(messageEl);
-                state.messages.push({ type, content: msg.content });
+            // Group consecutive assistant messages into one bubble
+            const grouped = [];
+            for (const msg of msgData.messages) {
+                if (msg.role === 'assistant') {
+                    const prev = grouped[grouped.length - 1];
+                    if (prev && prev.role === 'assistant') {
+                        // Merge into previous assistant group
+                        prev.blocks.push(...(msg.blocks || []));
+                        if (msg.content) prev.textParts.push(msg.content);
+                        // Keep the last stats (most complete — from final ResultMessage)
+                        if (msg.stats) prev.stats = msg.stats;
+                        continue;
+                    }
+                    grouped.push({
+                        role: 'assistant',
+                        blocks: [...(msg.blocks || [])],
+                        textParts: msg.content ? [msg.content] : [],
+                        stats: msg.stats || null,
+                    });
+                } else {
+                    grouped.push(msg);
+                }
+            }
+
+            grouped.forEach(msg => {
+                if (msg.role === 'user') {
+                    const messageEl = createMessageElement('user', msg.content);
+                    elements.messagesWrapper.appendChild(messageEl);
+                    state.messages.push({ type: 'user', content: msg.content, message_id: msg.message_id || null });
+                } else if (msg.role === 'assistant') {
+                    const messageEl = createMessageElement('assistant', '', true);
+                    const contentEl = messageEl.querySelector('.message-content');
+                    contentEl.innerHTML = `
+                        <div class="tools-container"></div>
+                        <div class="text-container"></div>
+                    `;
+                    const toolsContainer = contentEl.querySelector('.tools-container');
+                    const textContainer = contentEl.querySelector('.text-container');
+
+                    // Render all tool_use blocks from merged turns
+                    const toolBlocks = (msg.blocks || []).filter(b => b.type === 'tool_use');
+                    for (const block of toolBlocks) {
+                        addToolIndicator(toolsContainer, block.name);
+                    }
+
+                    // Merge all text parts
+                    const fullText = (msg.textParts || []).join('\n\n');
+                    if (fullText) {
+                        textContainer.innerHTML = renderMarkdown(fullText);
+                        if (typeof hljs !== 'undefined') {
+                            textContainer.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
+                                hljs.highlightElement(block);
+                            });
+                        }
+                    }
+
+                    // Render stats (from final turn)
+                    if (msg.stats) {
+                        const parts = [];
+                        if (msg.stats.usage) {
+                            const inp = msg.stats.usage.input_tokens || 0;
+                            const out = msg.stats.usage.output_tokens || 0;
+                            const cache_read = msg.stats.usage.cache_read_input_tokens || 0;
+                            parts.push(`${inp.toLocaleString()} in / ${out.toLocaleString()} out`);
+                            if (cache_read) parts.push(`cache: ${cache_read.toLocaleString()}`);
+                        }
+                        if (msg.stats.cost_usd != null) parts.push(`$${msg.stats.cost_usd.toFixed(4)}`);
+                        if (msg.stats.duration_ms) parts.push(`${(msg.stats.duration_ms / 1000).toFixed(1)}s`);
+                        if (parts.length) {
+                            const infoEl = document.createElement('div');
+                            infoEl.className = 'result-context-info';
+                            infoEl.textContent = parts.join(' · ');
+                            textContainer.appendChild(infoEl);
+                        }
+                    }
+
+                    elements.messagesWrapper.appendChild(messageEl);
+                    state.messages.push({ type: 'assistant', content: fullText });
+                }
             });
 
             scrollToBottom();
@@ -845,9 +919,13 @@
             const elapsed = formatElapsedTime(task.registered_at);
             const remainingTime = formatRemainingTime(task.expires_at);
 
+            const tmuxIndicator = task.tmux_alive === true ? '<span class="task-tmux alive" title="tmux alive">●</span>'
+                : task.tmux_alive === false ? '<span class="task-tmux dead" title="tmux dead">●</span>' : '';
+
             return `
                 <div class="task-item ${task.status}" data-task-id="${escapeHtml(task.task_id)}">
                     <span class="task-status-icon">${statusIcon}</span>
+                    ${tmuxIndicator}
                     <span class="task-id">${escapeHtml(task.task_id)}</span>
                     ${task.description ? `<span class="task-desc">${escapeHtml(task.description)}</span>` : ''}
                     ${task.total_steps > 0 ? `
@@ -1574,11 +1652,47 @@
         return { messageEl, contentEl, toolsContainer, textContainer };
     }
 
-    function addToolIndicator(contentEl, toolName, description) {
-        const indicator = document.createElement('div');
-        indicator.className = 'tool-indicator';
-        indicator.innerHTML = `${icons.tool} <span>Using: ${escapeHtml(toolName)}${description ? ' - ' + escapeHtml(description) : ''}</span>`;
-        contentEl.appendChild(indicator);
+    function cleanToolName(name) {
+        // "mcp__jarvis__jarvis_kill_task" → "kill_task"
+        // "mcp__xiaohongshu-mcp__search_feeds" → "search_feeds"
+        return name.replace(/^mcp__[^_]+__/, '').replace(/^jarvis_/, '');
+    }
+
+    function addToolIndicator(toolsContainer, toolName) {
+        const cleanName = cleanToolName(toolName);
+
+        // Lazy-init collapsible structure
+        if (!toolsContainer.querySelector('.tools-summary')) {
+            toolsContainer.innerHTML = `
+                <div class="tools-summary">
+                    <span class="tools-toggle">▶</span>
+                    <span class="tools-count"></span>
+                </div>
+                <div class="tools-list"></div>
+            `;
+            toolsContainer.querySelector('.tools-summary').onclick = () => {
+                toolsContainer.classList.toggle('expanded');
+                toolsContainer.querySelector('.tools-toggle').textContent =
+                    toolsContainer.classList.contains('expanded') ? '▼' : '▶';
+            };
+            toolsContainer._toolCounts = {};
+        }
+
+        // Track counts for deduplication
+        const counts = toolsContainer._toolCounts;
+        counts[cleanName] = (counts[cleanName] || 0) + 1;
+
+        // Update summary text
+        const total = Object.values(counts).reduce((a, b) => a + b, 0);
+        toolsContainer.querySelector('.tools-count').textContent = `Used ${total} tool${total > 1 ? 's' : ''}`;
+        toolsContainer.querySelector('.tools-summary').style.display = 'flex';
+
+        // Rebuild list
+        const listEl = toolsContainer.querySelector('.tools-list');
+        listEl.innerHTML = Object.entries(counts).map(([name, count]) =>
+            `<div class="tools-list-item">${escapeHtml(name)}${count > 1 ? ` <span class="tool-count-badge">\u00d7${count}</span>` : ''}</div>`
+        ).join('');
+
         scrollToBottom();
     }
 
@@ -1645,20 +1759,18 @@
                 }
                 break;
 
-            case 'text':
+            case 'text_delta':
+                // Primary text path: streaming token-by-token
                 if (state.textContainer) {
-                    // Clear loading indicator on first text
+                    // Clear loading indicator on first delta
                     if (state.fullContent === '' && !currentTypewriter) {
                         state.textContainer.innerHTML = '';
 
-                        // Initialize typewriter if enabled
                         if (TYPEWRITER_CONFIG.enabled) {
                             currentTypewriter = new TypewriterEngine(state.textContainer, TYPEWRITER_CONFIG);
                             currentTypewriter.start(
-                                // Render callback - update display
                                 (text) => {
                                     state.textContainer.innerHTML = renderMarkdown(text);
-                                    // Apply syntax highlighting
                                     if (typeof hljs !== 'undefined') {
                                         state.textContainer.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
                                             hljs.highlightElement(block);
@@ -1666,7 +1778,6 @@
                                     }
                                     scrollToBottom();
                                 },
-                                // Completion callback
                                 (finalText) => {
                                     enhanceCodeBlocks();
                                 }
@@ -1677,29 +1788,97 @@
                     state.fullContent += data.content;
 
                     if (TYPEWRITER_CONFIG.enabled && currentTypewriter) {
-                        // Feed to typewriter
                         currentTypewriter.append(data.content);
                     } else {
-                        // Direct render (non-typewriter mode)
                         state.textContainer.innerHTML = renderMarkdown(state.fullContent);
-
-                        // Apply syntax highlighting
                         if (typeof hljs !== 'undefined') {
                             state.textContainer.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
                                 hljs.highlightElement(block);
                             });
                         }
-
                         scrollToBottom();
                     }
                 }
                 break;
 
-            case 'tool':
+            case 'text':
+                // Fallback: full text from AssistantMessage (when streaming didn't send it)
+                if (state.textContainer) {
+                    if (state.fullContent === '' && !currentTypewriter) {
+                        state.textContainer.innerHTML = '';
+
+                        if (TYPEWRITER_CONFIG.enabled) {
+                            currentTypewriter = new TypewriterEngine(state.textContainer, TYPEWRITER_CONFIG);
+                            currentTypewriter.start(
+                                (text) => {
+                                    state.textContainer.innerHTML = renderMarkdown(text);
+                                    if (typeof hljs !== 'undefined') {
+                                        state.textContainer.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
+                                            hljs.highlightElement(block);
+                                        });
+                                    }
+                                    scrollToBottom();
+                                },
+                                (finalText) => {
+                                    enhanceCodeBlocks();
+                                }
+                            );
+                        }
+                    }
+
+                    state.fullContent += data.content;
+
+                    if (TYPEWRITER_CONFIG.enabled && currentTypewriter) {
+                        currentTypewriter.append(data.content);
+                    } else {
+                        state.textContainer.innerHTML = renderMarkdown(state.fullContent);
+                        if (typeof hljs !== 'undefined') {
+                            state.textContainer.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
+                                hljs.highlightElement(block);
+                            });
+                        }
+                        scrollToBottom();
+                    }
+                }
+                break;
+
+            case 'tool_start':
+                // Tool announced via streaming before execution
                 if (state.toolsContainer) {
-                    const desc = data.subagent ? `Subagent: ${data.subagent}` : data.description || '';
-                    addToolIndicator(state.toolsContainer, data.name, desc);
-                    setStatus('busy', `Using ${data.name}...`);
+                    addToolIndicator(state.toolsContainer, data.name);
+                    setStatus('busy', `Using ${cleanToolName(data.name)}...`);
+                }
+                break;
+
+            case 'tool':
+                // Tool confirmation from AssistantMessage (after streaming)
+                // tool_start already added it via streaming, so skip duplicate
+                if (state.toolsContainer) {
+                    setStatus('busy', `Using ${cleanToolName(data.name)}...`);
+                }
+                break;
+
+            case 'tool_result':
+                // Tool execution completed — update summary style if error
+                if (state.toolsContainer && data.is_error) {
+                    state.toolsContainer.classList.add('has-error');
+                }
+                break;
+
+            case 'text_start':
+            case 'block_stop':
+            case 'thinking_delta':
+                // No-op for now (thinking_delta could be rendered in future)
+                break;
+
+            case 'init':
+                // Init message from SDK with session/model info
+                console.log('Init:', data);
+                if (data.session_id) {
+                    currentClaudeSessionId = data.session_id;
+                }
+                if (data.model && elements.roleName) {
+                    elements.roleName.textContent = `${elements.roleName.textContent.split('(')[0].trim()} (${data.model})`;
                 }
                 break;
 
@@ -2796,12 +2975,21 @@
         const bookmarked = isBookmarked(message.type, message.content);
         const isUserMessage = message.type === 'user';
 
+        const hasRewind = isUserMessage && message.message_id;
         actionsDiv.innerHTML = `
             ${isUserMessage ? `
                 <button class="message-action-btn edit-btn" title="${window.i18n?.t('message.edit') || 'Edit message'}">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                         <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                    </svg>
+                </button>
+            ` : ''}
+            ${hasRewind ? `
+                <button class="message-action-btn rewind-btn" title="Rewind to here" data-message-id="${message.message_id}">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="1 4 1 10 7 10"></polyline>
+                        <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
                     </svg>
                 </button>
             ` : ''}
@@ -2824,6 +3012,32 @@
             editBtn.onclick = function(e) {
                 e.stopPropagation();
                 openEditModal(messageIndex);
+            };
+        }
+
+        // Rewind button handler
+        const rewindBtn = actionsDiv.querySelector('.rewind-btn');
+        if (rewindBtn) {
+            rewindBtn.onclick = async function(e) {
+                e.stopPropagation();
+                const msgId = rewindBtn.dataset.messageId;
+                if (!msgId) return;
+                if (!confirm('回退到此消息时的文件状态？此操作会撤销之后的所有文件变更。')) return;
+                try {
+                    const resp = await fetch(`/api/instances/${currentInstance}/rewind`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ user_message_id: msgId }),
+                    });
+                    const result = await resp.json();
+                    if (resp.ok) {
+                        showToast('Rewound', `Files rewound to message ${msgId.slice(0, 8)}...`, 'success', 3000);
+                    } else {
+                        showToast('Error', result.detail || 'Rewind failed', 'error', 3000);
+                    }
+                } catch (err) {
+                    showToast('Error', err.message, 'error', 3000);
+                }
             };
         }
 
@@ -2953,6 +3167,8 @@
             const percent = task.total_steps > 0 ? Math.round((progress / task.total_steps) * 100) : 0;
             const elapsed = formatElapsedTime(task.registered_at);
             const remaining = formatRemainingTime(task.expires_at);
+            const hasPrompt = task.prompt && task.prompt.length > 0;
+            const promptId = `prompt-${escapeHtml(task.task_id)}`;
 
             return `
                 <div class="drawer-task-item" data-task-id="${escapeHtml(task.task_id)}">
@@ -2964,9 +3180,18 @@
                     </button>
                     <div class="drawer-task-item-header">
                         <span class="drawer-task-id">${escapeHtml(task.task_id)}</span>
+                        ${task.tmux_alive === true ? '<span class="drawer-task-tmux alive" title="tmux alive">● tmux</span>'
+                            : task.tmux_alive === false ? '<span class="drawer-task-tmux dead" title="tmux dead">● tmux</span>' : ''}
                         <span class="drawer-task-status ${task.status}">${task.status}</span>
                     </div>
                     ${task.description ? `<div class="drawer-task-desc">${escapeHtml(task.description)}</div>` : ''}
+                    ${hasPrompt ? `
+                        <div class="drawer-task-prompt-tag" onclick="this.classList.toggle('open');document.getElementById('${promptId}').classList.toggle('expanded')">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+                            <span>Prompt</span>
+                        </div>
+                        <div class="drawer-task-prompt" id="${promptId}"><pre>${escapeHtml(task.prompt)}</pre></div>
+                    ` : ''}
                     ${task.total_steps > 0 ? `
                         <div class="drawer-task-progress">
                             <div class="drawer-task-progress-bar" style="width: ${percent}%"></div>

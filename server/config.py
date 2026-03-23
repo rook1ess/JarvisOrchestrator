@@ -2,7 +2,9 @@
 
 import json
 import os
+import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
 
@@ -11,6 +13,8 @@ from claude_agent_sdk import AgentDefinition
 # ============== 路径配置（提前定义，供后续使用）==============
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 DATA_DIR = PROJECT_ROOT / "data"
+
+# 注：不再使用 JARVIS_CONFIG_DIR 隔离 session，SDK 直接用 ~/.claude
 
 # ============== 持久化 SERVER_SESSION_ID ==============
 def _get_or_create_server_session_id() -> str:
@@ -91,9 +95,7 @@ def _get_instance_cwd() -> Optional[str]:
 
 
 def get_claude_sessions_dir() -> Path:
-    """获取 Claude session 存储目录。
-    当实例配置了 cwd 时，CLI 会以 cwd 作为项目根，session 存在对应目录下。
-    """
+    """Claude session 目录（~/.claude/projects/...），不再隔离"""
     cwd = _get_instance_cwd()
     base_path = cwd if cwd else str(PROJECT_ROOT)
     escaped_path = base_path.replace("/", "-")
@@ -102,6 +104,55 @@ def get_claude_sessions_dir() -> Path:
 
 def get_claude_sessions_index() -> Path:
     return get_claude_sessions_dir() / "sessions-index.json"
+
+
+def update_session_index(session_id: str, first_prompt: str = "", message_count: int = 0):
+    """更新 sessions-index.json（SDK 不维护索引，JARVIS 自行更新）"""
+    index_file = get_claude_sessions_index()
+    sessions_dir = get_claude_sessions_dir()
+    jsonl_file = sessions_dir / f"{session_id}.jsonl"
+
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    mtime = int(jsonl_file.stat().st_mtime * 1000) if jsonl_file.exists() else int(time.time() * 1000)
+
+    try:
+        if index_file.exists():
+            with open(index_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            cwd = _get_instance_cwd()
+            data = {"version": 1, "entries": [], "originalPath": cwd or str(PROJECT_ROOT)}
+
+        entries = data.get("entries", [])
+        existing = next((e for e in entries if e.get("sessionId") == session_id), None)
+
+        if existing:
+            existing["fileMtime"] = mtime
+            existing["modified"] = now
+            if message_count:
+                existing["messageCount"] = message_count
+            if first_prompt and existing.get("firstPrompt", "").startswith("No prompt"):
+                existing["firstPrompt"] = first_prompt
+        else:
+            entries.append({
+                "sessionId": session_id,
+                "fullPath": str(sessions_dir / session_id),
+                "fileMtime": mtime,
+                "firstPrompt": first_prompt or "No prompt",
+                "summary": "",
+                "messageCount": message_count or 1,
+                "created": now,
+                "modified": now,
+                "gitBranch": "",
+                "projectPath": _get_instance_cwd() or str(PROJECT_ROOT),
+                "isSidechain": False,
+            })
+
+        data["entries"] = entries
+        with open(index_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+    except Exception as e:
+        print(f"[Config] Failed to update session index: {e}")
 
 
 # ============== Instance 配置加载 ==============
