@@ -29,7 +29,7 @@ async def serve_local_file(path: str):
         raise HTTPException(status_code=403, detail="Only image files allowed")
 
     # 检查是否在允许的目录下
-    if not any(str(file_path).startswith(str(root.resolve())) for root in _ALLOWED_ROOTS):
+    if not any(file_path.is_relative_to(root.resolve()) for root in _ALLOWED_ROOTS):
         raise HTTPException(status_code=403, detail="Path not in allowed directories")
 
     if not file_path.exists():

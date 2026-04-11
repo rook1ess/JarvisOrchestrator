@@ -1,5 +1,5 @@
 {
-  "model": "opus",
+  "model": "opus[1m]",
   "permission_mode": "bypassPermissions",
   "mcp_enabled": true,
   "mcp_servers_disabled": [

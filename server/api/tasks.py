@@ -34,7 +34,7 @@ async def register_task(data: TaskRegisterData):
 
 @router.get("/task/list")
 async def list_tasks():
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     tasks = await loop.run_in_executor(None, lambda: _task_manager.get_all_tasks(check_tmux=True))
     return {"tasks": tasks}
 
@@ -76,7 +76,7 @@ async def get_instance_spawn_tasks(instance_id: str):
 @router.get("/api/spawn-tasks/{task_id}/output")
 async def get_spawn_task_output(task_id: str, lines: int = 100):
     """获取子进程 tmux 最近输出"""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def _do():
         check = subprocess.run(
@@ -99,7 +99,7 @@ async def get_spawn_task_output(task_id: str, lines: int = 100):
 @router.delete("/api/spawn-tasks/{task_id}")
 async def kill_spawn_task(task_id: str):
     """终止子进程 tmux session 并清理任务注册"""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def _do():
         result = subprocess.run(

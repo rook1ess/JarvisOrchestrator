@@ -1,13 +1,23 @@
-"""Claude Session 管理 API"""
+"""Claude Session 管理 API — 基于 SDK 接口"""
 
-import json
 import re
 from fastapi import APIRouter, HTTPException
-from server.config import load_claude_sessions, get_session_title, get_claude_sessions_dir
+from pydantic import BaseModel
+from typing import Optional
+
+from claude_agent_sdk import (
+    list_sessions,
+    get_session_messages as sdk_get_session_messages,
+    get_session_info,
+    rename_session,
+    tag_session,
+    fork_session,
+    delete_session as sdk_delete_session,
+)
+from server.config import _get_instance_cwd, PROJECT_ROOT
 
 router = APIRouter()
 
-# 这些会在 main.py 中注入
 _agent_manager = None
 _ws_channel = None
 
@@ -18,15 +28,21 @@ def init(agent_manager, ws_channel):
     _ws_channel = ws_channel
 
 
+def _get_directory() -> str:
+    """获取 session 存储的 directory（实例的 CWD）"""
+    return _get_instance_cwd() or str(PROJECT_ROOT)
+
+
 def _resolve_instance_id(instance_id: str = None) -> str:
-    """解析实例 ID，默认 ws-default"""
     return instance_id or "ws-default"
+
+
+_SYSTEM_STATUS_RE = re.compile(r"<system-status[^>]*>.*?</system-status>", re.DOTALL)
 
 
 @router.get("/api/claude-sessions")
 async def get_claude_sessions(instance_id: str = None):
     target = _resolve_instance_id(instance_id)
-    sessions = load_claude_sessions()
     instance = _agent_manager.get_instance(target) if _agent_manager else None
     current_session = instance.current_session_id if instance else None
 
@@ -36,15 +52,27 @@ async def get_claude_sessions(instance_id: str = None):
         config = _agent_manager.get_instance_config(target)
         pending_session = config.get("last_session_id")
 
+    try:
+        sessions = list_sessions(directory=_get_directory(), limit=50)
+    except Exception as e:
+        print(f"[Session] list_sessions failed: {e}")
+        sessions = []
+
     result = []
     for s in sessions:
+        title = s.custom_title or s.first_prompt or "(untitled)"
+        title = _SYSTEM_STATUS_RE.sub("", title).strip()
+        if not title:
+            title = "(untitled)"
         result.append({
-            "id": s.get("sessionId"),
-            "title": get_session_title(s),
-            "messageCount": s.get("messageCount", 0),
-            "created": s.get("created"),
-            "modified": s.get("modified"),
+            "id": s.session_id,
+            "title": title[:80],
+            "created": s.created_at,
+            "modified": s.last_modified,
+            "tag": s.tag,
+            "branch": s.git_branch,
         })
+
     return {
         "sessions": result,
         "current_session": current_session or pending_session,
@@ -54,12 +82,16 @@ async def get_claude_sessions(instance_id: str = None):
 @router.post("/api/claude-sessions/new")
 async def create_new_claude_session(instance_id: str = None):
     target = _resolve_instance_id(instance_id)
-    instance = _agent_manager.get_instance(target)
-    if instance:
-        await instance.restart(resume_session=None)  # 显式 None → 新 session
-    # 清除保存的 last_session_id，防止实例被回收后重建时恢复旧 session
+
+    # 先更新配置（持久化），再触发切换
     if _agent_manager:
         _agent_manager.clear_instance_config_key(target, "last_session_id")
+        _agent_manager._save_instance_sessions()
+
+    instance = _agent_manager.get_instance(target) if _agent_manager else None
+    if instance:
+        instance.schedule_session_switch(None)  # None = 新 session
+
     if _ws_channel:
         await _ws_channel.send_response(
             {"type": "session_changed", "session_id": None, "is_new": True},
@@ -71,135 +103,163 @@ async def create_new_claude_session(instance_id: str = None):
 @router.put("/api/claude-sessions/{session_id}/activate")
 async def activate_claude_session(session_id: str, instance_id: str = None):
     target = _resolve_instance_id(instance_id)
-    sessions = load_claude_sessions()
-    session = next((s for s in sessions if s.get("sessionId") == session_id), None)
-    if not session:
+
+    # 验证 session 存在
+    info = get_session_info(session_id, directory=_get_directory())
+    if not info:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    instance = _agent_manager.get_instance(target)
+    # 先持久化（无论实例是否存在，确保按需创建时也用正确的 session）
+    if _agent_manager:
+        _agent_manager.update_instance_config(target, "last_session_id", session_id)
+        _agent_manager._save_instance_sessions()
+
+    # 延迟切换（不立即 restart，等下一条消息时再切）
+    instance = _agent_manager.get_instance(target) if _agent_manager else None
     if instance:
-        await instance.restart(resume_session=session_id)
+        instance.schedule_session_switch(session_id)
+
+    title = info.custom_title or info.first_prompt or ""
+    title = _SYSTEM_STATUS_RE.sub("", title).strip()
 
     if _ws_channel:
         await _ws_channel.send_response(
-            {"type": "session_changed", "session_id": session_id, "title": get_session_title(session)},
+            {"type": "session_changed", "session_id": session_id, "title": title},
             {"instance_id": target}
         )
 
-    return {
-        "status": "ok",
-        "session": {
-            "id": session_id,
-            "title": get_session_title(session),
-            "messageCount": session.get("messageCount", 0)
-        }
-    }
-
-
-_SYSTEM_STATUS_RE = re.compile(r"<system-status[^>]*>.*?</system-status>", re.DOTALL)
+    return {"status": "ok", "session": {"id": session_id, "title": title}}
 
 
 @router.get("/api/claude-sessions/{session_id}/messages")
-async def get_session_messages(session_id: str):
-    sessions_dir = get_claude_sessions_dir()
-    jsonl_file = sessions_dir / f"{session_id}.jsonl"
-    if not jsonl_file.exists():
+async def get_session_messages_api(session_id: str, limit: int = None, offset: int = 0):
+    try:
+        raw_messages = sdk_get_session_messages(
+            session_id, directory=_get_directory(), limit=limit, offset=offset
+        )
+    except Exception as e:
         return {"messages": []}
 
     messages = []
-    try:
-        with open(jsonl_file, "r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+    for msg in raw_messages:
+        role = msg.type
+        content_blocks = msg.message.get("content", "") if isinstance(msg.message, dict) else ""
 
-                msg_type = entry.get("type")
+        if role == "user":
+            if msg.parent_tool_use_id:
+                continue
+            if isinstance(content_blocks, list):
+                text_parts = [p.get("text", "") for p in content_blocks if isinstance(p, dict) and p.get("type") == "text"]
+                content = "".join(text_parts)
+            elif isinstance(content_blocks, str):
+                content = content_blocks
+            else:
+                content = str(content_blocks)
+            content = _SYSTEM_STATUS_RE.sub("", content).strip()
+            if not content:
+                continue
+            m = {"role": "user", "content": content}
+            if msg.uuid:
+                m["message_id"] = msg.uuid
+            messages.append(m)
 
-                if msg_type == "user":
-                    # Skip internal tool results (not real user messages)
-                    if entry.get("message", {}).get("parent_tool_use_id"):
+        elif role == "assistant":
+            blocks = []
+            text_parts = []
+            if isinstance(content_blocks, list):
+                for block in content_blocks:
+                    if not isinstance(block, dict):
                         continue
-                    content = entry.get("message", {}).get("content", "")
-                    if isinstance(content, list):
-                        text_parts = [p.get("text", "") for p in content if p.get("type") == "text"]
-                        content = "".join(text_parts)
-                    # Strip <system-status> tags
-                    content = _SYSTEM_STATUS_RE.sub("", content).strip()
-                    if not content:
-                        continue
-                    msg = {"role": "user", "content": content}
-                    # Expose uuid as message_id for rewind
-                    if entry.get("uuid"):
-                        msg["message_id"] = entry["uuid"]
-                    messages.append(msg)
-
-                elif msg_type == "assistant":
-                    content_blocks = entry.get("message", {}).get("content", [])
-                    blocks = []
-                    text_parts = []
-                    for block in content_blocks:
-                        if not isinstance(block, dict):
-                            continue
-                        btype = block.get("type")
-                        if btype == "text":
-                            text_parts.append(block.get("text", ""))
-                            blocks.append({"type": "text", "text": block.get("text", "")})
-                        elif btype == "tool_use":
-                            blocks.append({
-                                "type": "tool_use",
-                                "name": block.get("name", ""),
-                                "id": block.get("id", ""),
-                                "input": block.get("input", {}),
-                            })
-                        elif btype == "thinking":
-                            blocks.append({"type": "thinking", "text": block.get("text", "")})
-                    messages.append({
-                        "role": "assistant",
-                        "content": "".join(text_parts),
-                        "blocks": blocks,
-                    })
-
-                elif msg_type == "result":
-                    # Attach stats to previous assistant message
-                    stats = {}
-                    if entry.get("usage"):
-                        stats["usage"] = entry["usage"]
-                    if entry.get("total_cost_usd") is not None:
-                        stats["cost_usd"] = entry["total_cost_usd"]
-                    if entry.get("duration_ms") is not None:
-                        stats["duration_ms"] = entry["duration_ms"]
-                    if entry.get("num_turns") is not None:
-                        stats["num_turns"] = entry["num_turns"]
-                    if stats and messages and messages[-1].get("role") == "assistant":
-                        messages[-1]["stats"] = stats
-
-                # Skip "summary", "system" types
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+                    btype = block.get("type")
+                    if btype == "text":
+                        text_parts.append(block.get("text", ""))
+                        blocks.append({"type": "text", "text": block.get("text", "")})
+                    elif btype == "tool_use":
+                        blocks.append({
+                            "type": "tool_use",
+                            "name": block.get("name", ""),
+                            "id": block.get("id", ""),
+                        })
+                    elif btype == "thinking":
+                        blocks.append({"type": "thinking", "text": block.get("text", "")})
+            messages.append({
+                "role": "assistant",
+                "content": "".join(text_parts),
+                "blocks": blocks,
+            })
 
     return {"messages": messages}
 
 
+class RenameRequest(BaseModel):
+    title: str
+
+
+@router.put("/api/claude-sessions/{session_id}/rename")
+async def rename_session_api(session_id: str, req: RenameRequest):
+    try:
+        rename_session(session_id, req.title, directory=_get_directory())
+        return {"status": "ok", "session_id": session_id, "title": req.title}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class TagRequest(BaseModel):
+    tag: Optional[str] = None
+
+
+@router.put("/api/claude-sessions/{session_id}/tag")
+async def tag_session_api(session_id: str, req: TagRequest):
+    try:
+        tag_session(session_id, req.tag, directory=_get_directory())
+        return {"status": "ok", "session_id": session_id, "tag": req.tag}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/claude-sessions/{session_id}/fork")
+async def fork_session_api(session_id: str, instance_id: str = None):
+    try:
+        result = fork_session(session_id, directory=_get_directory())
+        new_id = result.session_id
+        target = _resolve_instance_id(instance_id)
+
+        # 持久化 + 延迟切换
+        if _agent_manager:
+            _agent_manager.update_instance_config(target, "last_session_id", new_id)
+            _agent_manager._save_instance_sessions()
+
+        instance = _agent_manager.get_instance(target) if _agent_manager else None
+        if instance:
+            instance.schedule_session_switch(new_id)
+
+        if _ws_channel:
+            await _ws_channel.send_response(
+                {"type": "session_changed", "session_id": new_id, "title": f"Fork of {session_id[:8]}"},
+                {"instance_id": target}
+            )
+
+        return {"status": "ok", "original_session_id": session_id, "forked_session_id": new_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.delete("/api/claude-sessions/{session_id}")
 async def delete_claude_session(session_id: str):
-    sessions_dir = get_claude_sessions_dir()
-    jsonl_file = sessions_dir / f"{session_id}.jsonl"
+    try:
+        sdk_delete_session(session_id, directory=_get_directory())
+        print(f"[Session] 已删除: {session_id}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-    if jsonl_file.exists():
-        try:
-            jsonl_file.unlink()
-            print(f"[Session] 已删除 session 文件: {session_id}")
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to delete session file: {e}")
-
-    # 检查所有实例，清除引用该 session 的实例
     if _agent_manager:
         for iid, inst in _agent_manager.get_all_instances().items():
             if inst.current_session_id == session_id:
                 inst.current_session_id = None
+                inst.schedule_session_switch(None)  # 切到新 session
+        for iid, cfg in _agent_manager.get_all_instance_configs().items():
+            if cfg.get("last_session_id") == session_id:
+                _agent_manager.clear_instance_config_key(iid, "last_session_id")
+        _agent_manager._save_instance_sessions()
 
     return {"status": "deleted", "session_id": session_id}

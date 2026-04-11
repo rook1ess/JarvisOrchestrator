@@ -159,19 +159,16 @@ async def update_instance_config(instance_id: str, req: InstanceConfigUpdate):
     with open(instance_file, "w", encoding="utf-8") as f:
         json.dump(existing, f, indent=2, ensure_ascii=False)
 
-    # 如果实例正在运行，自动重启
+    # 如果实例正在运行，使用延迟重启（当前消息完成后执行，避免绕锁）
     inst = _agent_manager.get_instance(instance_id)
-    restarted = False
+    restart_scheduled = False
     if inst:
-        try:
-            await inst.restart()
-            restarted = True
-        except Exception as e:
-            print(f"[API] 重启实例失败: {e}")
+        inst.schedule_restart()
+        restart_scheduled = True
 
     return {
         "status": "saved",
-        "restarted": restarted,
+        "restart_scheduled": restart_scheduled,
         "config": existing,
     }
 
@@ -221,20 +218,14 @@ async def delete_instance(instance_id: str):
     if not instance_file.exists():
         raise HTTPException(status_code=404, detail=f"Instance '{instance_id}' not found")
 
-    # 如果实例正在运行，先停止
-    inst = _agent_manager.get_instance(instance_id)
-    if inst:
-        try:
-            await inst.stop()
-            _agent_manager._instances.pop(instance_id, None)
-        except Exception as e:
-            print(f"[API] 停止实例失败: {e}")
+    # 如果实例正在运行，通过 manager 停止（经过锁保护）
+    try:
+        await _agent_manager.stop_instance(instance_id, forget=True)
+    except Exception as e:
+        print(f"[API] 停止实例失败: {e}")
 
     # 删除配置文件
     instance_file.unlink()
-
-    # 清理 manager 中的配置缓存
-    _agent_manager.clear_instance_config_key(instance_id, "last_session_id")
 
     return {"status": "deleted", "instance_id": instance_id}
 

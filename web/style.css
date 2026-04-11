@@ -430,6 +430,41 @@ body::after {
     margin-top: 2px;
 }
 
+.session-actions {
+    display: none;
+    align-items: center;
+    gap: 2px;
+}
+.session-item:hover .session-actions {
+    display: flex;
+}
+.session-action-btn {
+    padding: 2px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+}
+.session-action-btn:hover {
+    color: var(--accent-primary);
+    background: var(--accent-muted);
+}
+.session-action-btn.delete:hover {
+    color: #b54a4a;
+    background: rgba(181, 74, 74, 0.1);
+}
+.session-tag {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 8px;
+    background: var(--accent-muted);
+    color: var(--accent-primary);
+    font-weight: 400;
+}
+
 .session-delete-btn {
     display: none;
     padding: 2px;
@@ -771,10 +806,46 @@ body::after {
 .mcp-toggle-switch input:checked + .mcp-toggle-slider { background: var(--accent-primary); }
 .mcp-toggle-switch input:checked + .mcp-toggle-slider::before { transform: translateX(12px); }
 
-/* MCP Popover positioning */
-#mcpPopover {
+/* Header Pill Buttons (MCP, Permission) */
+.header-pill-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-primary);
+    border-radius: 999px;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    white-space: nowrap;
+}
+.header-pill-btn:hover {
+    border-color: var(--border-accent);
+    color: var(--accent-primary);
+}
+.header-pill-btn svg {
+    flex-shrink: 0;
+}
+
+/* MCP, Permission, Model Popover positioning */
+#mcpPopover, #permissionPopover, #modelPopover {
     right: 0;
-    min-width: 240px;
+    min-width: 180px;
+    font-size: 13px;
+}
+#permissionPopover .context-stat-row {
+    font-size: 13px;
+    padding: 5px 8px;
+}
+
+/* Response hint (shown while waiting) */
+.response-hint {
+    color: var(--text-muted);
+    font-size: 13px;
+    font-style: italic;
 }
 
 /* Thinking Block */

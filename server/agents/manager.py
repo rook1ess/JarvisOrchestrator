@@ -69,7 +69,7 @@ class AgentManager:
             instance.set_agent_manager(self)
             await instance.start(resume_session)
             self._instances[instance_id] = instance
-            self._instance_configs[instance_id] = {}
+            self._instance_configs.setdefault(instance_id, {})
             return instance
 
     async def stop_instance(self, instance_id: str, forget: bool = False):
@@ -110,8 +110,9 @@ class AgentManager:
         return dict(self._instance_configs)
 
     def update_instance_config(self, instance_id: str, key: str, value):
-        """更新实例运行时配置的某个字段"""
+        """更新实例运行时配置的某个字段并持久化"""
         self._instance_configs.setdefault(instance_id, {})[key] = value
+        self._save_instance_sessions()
 
     def clear_instance_config_key(self, instance_id: str, key: str):
         """清除实例运行时配置的某个字段"""

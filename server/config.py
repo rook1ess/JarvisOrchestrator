@@ -53,8 +53,19 @@ WEB_DIR = PROJECT_ROOT / "web"
 # ============== QQ (NapCat OneBot11) 配置 ==============
 NAPCAT_API_URL = os.getenv("NAPCAT_API_URL", "http://localhost:3000")
 NAPCAT_TOKEN = os.getenv("NAPCAT_TOKEN", "")
-QQ_ALLOWED_USERS = [int(x) for x in os.getenv("QQ_ALLOWED_USERS", "").split(",") if x.strip()]
-QQ_ALLOWED_GROUPS = [int(x) for x in os.getenv("QQ_ALLOWED_GROUPS", "").split(",") if x.strip()]
+def _parse_int_list(env_key: str) -> list:
+    result = []
+    for x in os.getenv(env_key, "").split(","):
+        x = x.strip()
+        if x:
+            try:
+                result.append(int(x))
+            except ValueError:
+                print(f"[Config] 警告: {env_key} 中的 '{x}' 不是有效数字，已跳过")
+    return result
+
+QQ_ALLOWED_USERS = _parse_int_list("QQ_ALLOWED_USERS")
+QQ_ALLOWED_GROUPS = _parse_int_list("QQ_ALLOWED_GROUPS")
 QQ_GROUP_AT_ONLY = os.getenv("QQ_GROUP_AT_ONLY", "true").lower() == "true"
 
 # ============== 可用工具列表 ==============
@@ -250,48 +261,5 @@ def build_subagents_dict(subagent_ids: List[str]) -> dict:
     return subagents
 
 
-def get_mcp_servers_from_config(mcp_config_path: Optional[str]) -> list:
-    if not mcp_config_path:
-        return []
-    config_file = PROJECT_ROOT / mcp_config_path
-    if not config_file.exists():
-        return []
-    try:
-        with open(config_file, "r", encoding="utf-8") as f:
-            config = json.load(f)
-            servers = config.get("mcpServers", {})
-            return [{"id": name, "name": name, "url": info.get("url", "")}
-                    for name, info in servers.items()]
-    except Exception:
-        return []
 
-
-def load_claude_sessions() -> list:
-    index_file = get_claude_sessions_index()
-    sessions_dir = get_claude_sessions_dir()
-    if not index_file.exists():
-        return []
-    try:
-        with open(index_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            entries = data.get("entries", [])
-            valid_entries = []
-            for entry in entries:
-                session_id = entry.get("sessionId", "")
-                jsonl_file = sessions_dir / f"{session_id}.jsonl"
-                if jsonl_file.exists():
-                    valid_entries.append(entry)
-            valid_entries.sort(key=lambda x: x.get("modified", ""), reverse=True)
-            return valid_entries
-    except Exception as e:
-        print(f"[Error] Failed to load Claude sessions: {e}")
-        return []
-
-
-def get_session_title(session: dict) -> str:
-    first_prompt = session.get("firstPrompt", "New Chat")
-    if "<system-status" in first_prompt:
-        import re
-        first_prompt = re.sub(r'<system-status[^>]*>.*?</system-status>\s*', '', first_prompt, flags=re.DOTALL)
-    title = first_prompt.strip()[:40]
-    return title if title else "New Chat"
+# load_claude_sessions / get_session_title 已迁移到 SDK 接口（sessions.py）

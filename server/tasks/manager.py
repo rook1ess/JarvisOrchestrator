@@ -248,8 +248,9 @@ class TaskManager:
                     await self._broadcast_task_update(task, "timeout")
                     await on_timeout_callback(task_id, task["description"], task.get("instance_id"))
 
-                # 定期清理 tmux 已死但任务仍在的孤儿
-                self._cleanup_dead_tmux()
+                # 定期清理 tmux 已死但任务仍在的孤儿（在线程池中运行，避免阻塞事件循环）
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, self._cleanup_dead_tmux)
 
         self._check_task = asyncio.create_task(check_loop())
         print("[TaskManager] 超时检查器已启动")

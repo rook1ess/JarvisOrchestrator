@@ -623,15 +623,29 @@
                     </svg>
                 </div>
                 <div class="session-info">
-                    <div class="session-title">${escapeHtml(s.title || 'New Chat')}</div>
+                    <div class="session-title">${escapeHtml(s.title || 'New Chat')}${s.tag ? ` <span class="session-tag">${escapeHtml(s.tag)}</span>` : ''}</div>
                     <div class="session-meta-row">
                         <span class="session-meta">${formatTime(s.modified)}</span>
-                        <button class="session-delete-btn" onclick="event.stopPropagation(); window.deleteClaudeSession('${s.id}')" title="Delete">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <polyline points="3 6 5 6 21 6"/>
-                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-                            </svg>
-                        </button>
+                        <div class="session-actions">
+                            <button class="session-action-btn" onclick="event.stopPropagation(); window.renameClaudeSession('${s.id}')" title="Rename">
+                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                                </svg>
+                            </button>
+                            <button class="session-action-btn" onclick="event.stopPropagation(); window.forkClaudeSession('${s.id}')" title="Fork">
+                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/>
+                                    <path d="M18 9v1a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V9"/><line x1="12" y1="12" x2="12" y2="15"/>
+                                </svg>
+                            </button>
+                            <button class="session-action-btn delete" onclick="event.stopPropagation(); window.deleteClaudeSession('${s.id}')" title="Delete">
+                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="3 6 5 6 21 6"/>
+                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                                </svg>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -640,57 +654,128 @@
         elements.sessionsList.innerHTML = html;
     }
 
+    window.renameClaudeSession = async function(sessionId) {
+        const newTitle = prompt('Rename session:', '');
+        if (!newTitle) return;
+        try {
+            await fetch(`/api/claude-sessions/${sessionId}/rename`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: newTitle }),
+            });
+            await loadClaudeSessions();
+            showToast('Renamed', newTitle, 'success', 1500);
+        } catch (e) {
+            showToast('Error', 'Rename failed', 'error');
+        }
+    };
+
+    window.forkClaudeSession = async function(sessionId) {
+        try {
+            const resp = await fetch(`/api/claude-sessions/${sessionId}/fork`, { method: 'POST' });
+            const data = await resp.json();
+            if (data.forked_session_id) {
+                currentClaudeSessionId = data.forked_session_id;
+                await loadClaudeSessions();
+                showToast('Forked', 'New branch created', 'success', 1500);
+            }
+        } catch (e) {
+            showToast('Error', 'Fork failed', 'error');
+        }
+    };
+
     window.switchClaudeSession = async function(sessionId) {
         if (sessionId === currentClaudeSessionId) return;
 
+        // 如果正在处理消息，重置前端状态
+        if (state.isLoading) {
+            state.isLoading = false;
+            state.currentMessageId = null;
+            state.currentMessageEl = null;
+            state.toolsContainer = null;
+            state.textContainer = null;
+            state.fullContent = '';
+            updateButtonState();
+        }
+
         try {
-            setStatus('busy', 'Switching session...');
+            setStatus('busy', 'Switching...');
             _sessionChangeInitiatedLocally = true;
 
-            // 调用后端 API 切换 session
             const response = await fetch(`/api/claude-sessions/${sessionId}/activate`, {
                 method: 'PUT'
             });
 
-            if (!response.ok) {
-                _sessionChangeInitiatedLocally = false;
-                throw new Error('Failed to switch session');
-            }
+            if (!response.ok) throw new Error('Failed to switch session');
 
-            const result = await response.json();
             currentClaudeSessionId = sessionId;
 
-            // 清空当前 UI
+            // 清空 UI 并加载该 session 的消息
             elements.messagesWrapper.innerHTML = '';
             state.messages = [];
 
-            // 加载 session 的消息历史
-            const messagesResponse = await fetch(`/api/claude-sessions/${sessionId}/messages`);
-            const messagesData = await messagesResponse.json();
+            const msgResponse = await fetch(`/api/claude-sessions/${sessionId}/messages`);
+            const msgData = await msgResponse.json();
 
-            if (messagesData.messages && messagesData.messages.length > 0) {
-                if (elements.welcomeMessage) {
-                    elements.welcomeMessage.classList.add('hidden');
+            if (msgData.messages && msgData.messages.length > 0) {
+                if (elements.welcomeMessage) elements.welcomeMessage.classList.add('hidden');
+
+                // 复用 loadCurrentSessionMessages 的分组渲染逻辑
+                const grouped = [];
+                for (const msg of msgData.messages) {
+                    if (msg.role === 'assistant') {
+                        const prev = grouped[grouped.length - 1];
+                        if (prev && prev.role === 'assistant') {
+                            prev.blocks.push(...(msg.blocks || []));
+                            if (msg.content) prev.textParts.push(msg.content);
+                            if (msg.stats) prev.stats = msg.stats;
+                            continue;
+                        }
+                        grouped.push({
+                            role: 'assistant',
+                            blocks: [...(msg.blocks || [])],
+                            textParts: msg.content ? [msg.content] : [],
+                            stats: msg.stats || null,
+                        });
+                    } else {
+                        grouped.push(msg);
+                    }
                 }
 
-                messagesData.messages.forEach(msg => {
-                    const messageEl = createMessageElement(
-                        msg.role === 'user' ? 'user' : 'assistant',
-                        msg.content
-                    );
-                    elements.messagesWrapper.appendChild(messageEl);
-                    state.messages.push({
-                        type: msg.role === 'user' ? 'user' : 'assistant',
-                        content: msg.content
-                    });
-                });
+                for (const msg of grouped) {
+                    if (msg.role === 'user') {
+                        addMessage('user', msg.content);
+                    } else {
+                        const text = msg.textParts?.join('\n\n') || msg.content || '';
+                        const el = createMessageElement('assistant', '');
+                        const contentEl = el.querySelector('.message-content');
+                        if (contentEl && text) {
+                            contentEl.innerHTML = renderMarkdown(text);
+                            enhanceCodeBlocks();
+                        }
+                        if (msg.stats) {
+                            const parts = [];
+                            if (msg.stats.usage) {
+                                parts.push(`${(msg.stats.usage.input_tokens||0).toLocaleString()} in / ${(msg.stats.usage.output_tokens||0).toLocaleString()} out`);
+                            }
+                            if (msg.stats.cost_usd != null) parts.push(`$${msg.stats.cost_usd.toFixed(4)}`);
+                            if (msg.stats.duration_ms) parts.push(`${(msg.stats.duration_ms/1000).toFixed(1)}s`);
+                            if (parts.length) {
+                                const info = document.createElement('div');
+                                info.className = 'result-context-info';
+                                info.textContent = parts.join(' · ');
+                                contentEl.appendChild(info);
+                            }
+                        }
+                        elements.messagesWrapper.appendChild(el);
+                        state.messages.push({ type: 'assistant', content: text });
+                    }
+                }
                 scrollToBottom();
             } else {
-                // 显示欢迎消息
                 showWelcomeMessage();
             }
 
-            // 更新列表显示
             await loadClaudeSessions();
             setStatus('ready', 'Ready');
             showToast('Session Loaded', 'Switched to selected conversation', 'success', 2000);
@@ -698,6 +783,8 @@
             console.error('Failed to switch Claude session:', error);
             setStatus('error', 'Switch failed');
             showToast('Error', 'Failed to switch session', 'error');
+        } finally {
+            setTimeout(() => { _sessionChangeInitiatedLocally = false; }, 1000);
         }
     };
 
@@ -797,8 +884,13 @@
 
     function formatTime(timestamp) {
         if (!timestamp) return '';
-        // Handle both ISO string and Unix timestamp
-        const date = typeof timestamp === 'number' ? new Date(timestamp * 1000) : new Date(timestamp);
+        // Handle ISO string, Unix seconds, and Unix milliseconds
+        let date;
+        if (typeof timestamp === 'number') {
+            date = new Date(timestamp > 1e12 ? timestamp : timestamp * 1000);  // ms vs seconds
+        } else {
+            date = new Date(timestamp);
+        }
         const now = new Date();
         const diffMs = now - date;
         const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
@@ -1632,15 +1724,7 @@
         // Create separate containers for tools and text
         contentEl.innerHTML = `
             <div class="tools-container"></div>
-            <div class="text-container">
-                <div class="loading-indicator">
-                    <div class="loading-dots">
-                        <span></span>
-                        <span></span>
-                        <span></span>
-                    </div>
-                </div>
-            </div>
+            <div class="text-container"><span class="response-hint">Responding...</span></div>
         `;
 
         elements.messagesWrapper.appendChild(messageEl);
@@ -1747,6 +1831,8 @@
                 setStatus('ready', 'Ready');
                 // 连接成功后从服务端加载当前 session 的消息
                 loadCurrentSessionMessages();
+                // 加载 context 百分比到 pill 按钮上
+                setTimeout(fetchContextUsage, 1000);
                 break;
 
             case 'user_message':
@@ -1789,11 +1875,6 @@
                             currentTypewriter.start(
                                 (text) => {
                                     state.textContainer.innerHTML = renderMarkdown(text);
-                                    if (typeof hljs !== 'undefined') {
-                                        state.textContainer.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
-                                            hljs.highlightElement(block);
-                                        });
-                                    }
                                     scrollToBottom();
                                 },
                                 (finalText) => {
@@ -1809,11 +1890,6 @@
                         currentTypewriter.append(data.content);
                     } else {
                         state.textContainer.innerHTML = renderMarkdown(state.fullContent);
-                        if (typeof hljs !== 'undefined') {
-                            state.textContainer.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
-                                hljs.highlightElement(block);
-                            });
-                        }
                         scrollToBottom();
                     }
                 }
@@ -1831,11 +1907,6 @@
                             currentTypewriter.start(
                                 (text) => {
                                     state.textContainer.innerHTML = renderMarkdown(text);
-                                    if (typeof hljs !== 'undefined') {
-                                        state.textContainer.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
-                                            hljs.highlightElement(block);
-                                        });
-                                    }
                                     scrollToBottom();
                                 },
                                 (finalText) => {
@@ -1851,11 +1922,6 @@
                         currentTypewriter.append(data.content);
                     } else {
                         state.textContainer.innerHTML = renderMarkdown(state.fullContent);
-                        if (typeof hljs !== 'undefined') {
-                            state.textContainer.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
-                                hljs.highlightElement(block);
-                            });
-                        }
                         scrollToBottom();
                     }
                 }
@@ -1912,19 +1978,27 @@
                 break;
 
             case 'rate_limit':
-                // Rate limit notification — show toast regardless of message_id
+                // Only show toast for actual rate limiting (retry_after_ms > 0)
                 {
                     const retryMs = data.info?.retry_after_ms;
-                    const retrySec = retryMs ? Math.ceil(retryMs / 1000) : '?';
-                    showToast('Rate Limited', `Retrying in ${retrySec}s...`, 'error', retryMs || 5000);
-                    setStatus('busy', `Rate limited (${retrySec}s)`);
+                    if (retryMs && retryMs > 0) {
+                        const retrySec = Math.ceil(retryMs / 1000);
+                        showToast('Rate Limited', `Retrying in ${retrySec}s...`, 'error', retryMs);
+                        setStatus('busy', `Rate limited (${retrySec}s)`);
+                    }
                 }
                 break;
 
             case 'init':
-                // Init message from SDK with session/model info
+                // Init message from SDK with session/model info — instance is now ready
                 if (!_isForCurrentMessage(data)) break;
                 console.log('Init:', data);
+                setStatus('busy', 'Responding...');
+                // Update hint text
+                if (state.textContainer) {
+                    const hint = state.textContainer.querySelector('.response-hint');
+                    if (hint) hint.textContent = 'Responding...';
+                }
                 if (data.session_id) {
                     currentClaudeSessionId = data.session_id;
                 }
@@ -2010,6 +2084,7 @@
             case 'cancelled':
                 // Generation was cancelled but context preserved
                 if (!_isForCurrentMessage(data)) break;
+
                 // Stop typewriter and flush remaining content
                 if (currentTypewriter) {
                     currentTypewriter.complete();
@@ -2114,7 +2189,7 @@
         state.isLoading = true;
         state.currentMessageId = messageId;
         updateButtonState();
-        setStatus('busy', 'Thinking...');
+        setStatus('busy', 'Starting...');
 
         // Add user message with attachments preview
         addMessage('user', message, attachments);
@@ -2151,49 +2226,6 @@
 
         // Send to WebSocket
         state.ws.send(JSON.stringify(payload));
-    }
-
-    function clearSession() {
-        // Close and reconnect WebSocket
-        if (state.ws) {
-            state.ws.close();
-        }
-
-        // Clear UI
-        elements.messagesWrapper.innerHTML = '';
-        if (elements.welcomeMessage) {
-            elements.messagesWrapper.appendChild(elements.welcomeMessage);
-            elements.welcomeMessage.classList.remove('hidden');
-        } else {
-            elements.messagesWrapper.innerHTML = `
-                <div class="welcome-message" id="welcomeMessage">
-                    <div class="welcome-icon">
-                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
-                            <path d="M12 2L2 7L12 12L22 7L12 2Z"/>
-                            <path d="M2 17L12 22L22 17"/>
-                            <path d="M2 12L12 17L22 12"/>
-                        </svg>
-                    </div>
-                    <h2>Start a Conversation</h2>
-                    <p>Send a message to begin chatting with the AI agent.</p>
-                </div>
-            `;
-        }
-
-        // Clear attachments
-        state.attachments = [];
-        renderAttachmentPreviews();
-
-        state.messages = [];
-        state.currentMessageEl = null;
-        state.currentContentEl = null;
-        state.toolsContainer = null;
-        state.textContainer = null;
-        state.fullContent = '';
-        state.currentMessageId = null;
-
-        // Reconnect
-        setTimeout(connectWebSocket, 100);
     }
 
     // ============================================
@@ -2889,9 +2921,12 @@
         if (ctxMax) ctxMax.textContent = (ctx.maxTokens || 0).toLocaleString();
 
         if (catContainer && ctx.categories) {
-            catContainer.innerHTML = ctx.categories.map(c =>
-                `<div class="context-stat-row"><span>${c.name}</span><span>${c.tokens.toLocaleString()}</span></div>`
-            ).join('');
+            catContainer.innerHTML = ctx.categories
+                .filter(c => c.tokens > 0 && c.name !== 'Free space' && c.name !== 'Autocompact buffer')
+                .map(c => {
+                    const dimStyle = c.isDeferred ? ' style="color:var(--text-muted)"' : '';
+                    return `<div class="context-stat-row"${dimStyle}><span>${c.name}</span><span>${c.tokens.toLocaleString()}</span></div>`;
+                }).join('');
         }
     }
 
@@ -2907,124 +2942,220 @@
     // ============================================
     function initMcpPanel() {
         const btn = document.getElementById('mcpBtn');
-        if (!btn) return;
+        const popover = document.getElementById('mcpPopover');
+        if (!btn || !popover) return;
 
-        btn.addEventListener('click', async (e) => {
+        btn.addEventListener('click', (e) => {
             e.stopPropagation();
-            // Toggle a popover or show a modal
-            let popover = document.getElementById('mcpPopover');
-            if (!popover) {
-                popover = document.createElement('div');
-                popover.id = 'mcpPopover';
-                popover.className = 'context-popover';
-                btn.parentElement.appendChild(popover);
-                document.addEventListener('click', (ev) => {
-                    if (!popover.contains(ev.target) && ev.target !== btn) popover.classList.remove('open');
-                });
-            }
             popover.classList.toggle('open');
-            if (popover.classList.contains('open')) {
-                popover.innerHTML = '<div class="context-popover-title">MCP Servers</div><div style="padding:8px;color:var(--text-muted)">Loading...</div>';
-                try {
-                    const resp = await fetch(`/api/instances/${currentInstance}/mcp-status`);
-                    if (!resp.ok) { popover.innerHTML = '<div class="context-popover-title">MCP Servers</div><div style="padding:8px;color:var(--text-muted)">Instance not running</div>'; return; }
-                    const data = await resp.json();
-                    const status = data.mcp_status;
-                    renderMcpPanel(popover, status);
-                } catch (e) {
-                    popover.innerHTML = '<div class="context-popover-title">MCP Servers</div><div style="padding:8px;color:var(--text-muted)">Error loading</div>';
-                }
-            }
+            if (popover.classList.contains('open')) loadMcpStatus();
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!popover.contains(e.target) && e.target !== btn) popover.classList.remove('open');
         });
     }
 
-    function renderMcpPanel(popover, status) {
-        // status is the raw SDK McpStatusResponse
-        let html = '<div class="context-popover-title">MCP Servers</div>';
-        if (!status || typeof status !== 'object') {
-            html += '<div style="padding:8px;color:var(--text-muted)">No data</div>';
-            popover.innerHTML = html;
-            return;
-        }
-        // status may have .servers or be a dict of server statuses
-        const servers = status.servers || status;
-        if (typeof servers === 'object') {
-            const entries = Array.isArray(servers) ? servers : Object.entries(servers);
-            if (entries.length === 0) {
-                html += '<div style="padding:8px;color:var(--text-muted)">No MCP servers</div>';
-            } else {
-                entries.forEach(entry => {
-                    let name, info;
-                    if (Array.isArray(entry)) {
-                        [name, info] = entry;
-                    } else {
-                        name = entry.name; info = entry;
+    async function loadMcpStatus() {
+        const listEl = document.getElementById('mcpServerList');
+        if (!listEl) return;
+        listEl.innerHTML = '<span style="color:var(--text-muted)">Loading...</span>';
+        try {
+            const resp = await fetch(`/api/instances/${currentInstance}/mcp-status`);
+            if (!resp.ok) { listEl.innerHTML = '<span style="color:var(--text-muted)">Instance not running</span>'; return; }
+            const data = await resp.json();
+            const servers = data.mcp_status?.mcpServers || [];
+            if (!servers.length) { listEl.innerHTML = '<span style="color:var(--text-muted)">No MCP servers</span>'; return; }
+
+            listEl.innerHTML = servers.map(s => {
+                const connected = s.status === 'connected';
+                const dotColor = connected ? '#22c55e' : '#ef4444';
+                const toolCount = s.tools?.length || 0;
+                return `<div class="context-stat-row" style="align-items:center">
+                    <span><span style="color:${dotColor};margin-right:4px">●</span>${escapeHtml(s.name)}<span style="color:var(--text-muted);margin-left:4px;font-size:11px">(${toolCount})</span></span>
+                    <label class="mcp-toggle-switch"><input type="checkbox" ${connected ? 'checked' : ''} data-mcp-name="${escapeHtml(s.name)}"><span class="mcp-toggle-slider"></span></label>
+                </div>`;
+            }).join('');
+
+            // Bind toggle handlers
+            listEl.querySelectorAll('input[data-mcp-name]').forEach(input => {
+                input.addEventListener('change', async () => {
+                    const serverName = input.dataset.mcpName;
+                    const enabled = input.checked;
+                    try {
+                        const r = await fetch(`/api/instances/${currentInstance}/mcp-toggle`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ server_name: serverName, enabled }),
+                        });
+                        if (r.ok) {
+                            showToast('MCP', `${serverName}: ${enabled ? 'enabled' : 'disabled'}`, 'info', 2000);
+                            // 刷新面板状态
+                            setTimeout(loadMcpStatus, 500);
+                        } else {
+                            input.checked = !enabled;
+                            showToast('MCP', 'Toggle failed', 'error');
+                        }
+                    } catch (e) {
+                        input.checked = !enabled;
+                        showToast('MCP', 'Toggle failed', 'error');
                     }
-                    const connected = info === 'connected' || info?.status === 'connected' || info === 'enabled';
-                    const disabled = info === 'disabled' || info?.status === 'disabled';
-                    const statusText = typeof info === 'string' ? info : (info?.status || 'unknown');
-                    const dotColor = connected ? 'var(--accent-green, #22c55e)' : disabled ? 'var(--text-muted)' : '#f59e0b';
-                    html += `<div class="context-stat-row" style="cursor:pointer" data-mcp="${escapeHtml(name)}">
-                        <span><span style="color:${dotColor};margin-right:4px">●</span>${escapeHtml(name)}</span>
-                        <label class="mcp-toggle-switch"><input type="checkbox" ${!disabled ? 'checked' : ''} data-mcp-name="${escapeHtml(name)}"><span class="mcp-toggle-slider"></span></label>
-                    </div>`;
                 });
-            }
-        }
-        popover.innerHTML = html;
-        // Bind toggle handlers
-        popover.querySelectorAll('input[data-mcp-name]').forEach(input => {
-            input.addEventListener('change', async () => {
-                const serverName = input.dataset.mcpName;
-                const enabled = input.checked;
-                try {
-                    await fetch(`/api/instances/${currentInstance}/mcp-toggle`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ server_name: serverName, enabled }),
-                    });
-                    showToast('MCP', `${serverName}: ${enabled ? 'enabled' : 'disabled'}`, 'info', 2000);
-                } catch (e) {
-                    showToast('MCP', 'Toggle failed', 'error');
-                    input.checked = !enabled;
-                }
             });
-        });
+        } catch (e) {
+            listEl.innerHTML = '<span style="color:var(--text-muted)">Error loading</span>';
+        }
     }
 
     // ============================================
     // Permission Mode Toggle
     // ============================================
     const PERMISSION_MODES = [
-        { value: 'bypassPermissions', label: 'Bypass', icon: '🔓' },
-        { value: 'auto', label: 'Auto', icon: '⚡' },
-        { value: 'default', label: 'Default', icon: '🔒' },
+        { value: 'bypassPermissions', short: 'Bypass', label: '跳过所有权限检查' },
+        { value: 'dontAsk', short: 'DontAsk', label: '允许所有工具不询问' },
+        { value: 'auto', short: 'Auto', label: '自动判断权限' },
+        { value: 'acceptEdits', short: 'AcceptEdits', label: '自动接受文件编辑' },
+        { value: 'plan', short: 'Plan', label: '仅规划不执行' },
+        { value: 'default', short: 'Default', label: '危险操作需确认' },
     ];
     let currentPermissionMode = 'bypassPermissions';
 
+    // ============================================
+    // Model Selector
+    // ============================================
+    const MODELS = [
+        { value: 'opus', label: 'Opus 4.6' },
+        { value: 'opus[1m]', label: 'Opus 4.6 [1M]' },
+        { value: 'sonnet', label: 'Sonnet 4.6' },
+        { value: 'sonnet[1m]', label: 'Sonnet 4.6 [1M]' },
+        { value: 'haiku', label: 'Haiku 4.5' },
+        { value: 'opusplan', label: 'OpusPlan' },
+    ];
+    let currentModel = 'opus';
+
+    function initModelSelector() {
+        const btn = document.getElementById('modelBtn');
+        const popover = document.getElementById('modelPopover');
+        const listEl = document.getElementById('modelList');
+        if (!btn || !popover || !listEl) return;
+
+        // Fetch current model from config
+        fetch(`/api/instances/${currentInstance}/config`).then(r => r.json()).then(data => {
+            const model = data.merged_config?.model || 'opus';
+            currentModel = model;
+            const modelInfo = MODELS.find(m => m.value === model);
+            const label = document.getElementById('modelLabel');
+            if (label) label.textContent = modelInfo?.label || model;
+        }).catch(() => {});
+
+        function renderModels() {
+            listEl.innerHTML = MODELS.map(m => {
+                const active = m.value === currentModel;
+                return `<div class="context-stat-row" data-model="${m.value}" style="cursor:pointer;padding:5px 8px;border-radius:4px;${active ? 'background:var(--accent-muted);color:var(--accent-primary);font-weight:500' : ''}">
+                    <span>${m.label}</span>
+                    ${active ? '<span style="font-size:12px">&#10003;</span>' : ''}
+                </div>`;
+            }).join('');
+
+            listEl.querySelectorAll('[data-model]').forEach(row => {
+                row.addEventListener('click', async () => {
+                    const model = row.dataset.model;
+                    if (model === currentModel) return;
+                    try {
+                        // 运行时切换 + 持久化到配置
+                        const [resp, _] = await Promise.all([
+                            fetch(`/api/instances/${currentInstance}/model`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ model }),
+                            }),
+                            fetch(`/api/instances/${currentInstance}/config`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ model }),
+                            }),
+                        ]);
+                        if (resp.ok) {
+                            currentModel = model;
+                            const modelInfo = MODELS.find(m => m.value === model);
+                            const label = document.getElementById('modelLabel');
+                            if (label) label.textContent = modelInfo?.label || model;
+                            renderModels();
+                            popover.classList.remove('open');
+                            showToast('Model', `Switched to ${modelInfo?.label || model}`, 'info', 1500);
+                        } else {
+                            showToast('Model', 'Instance not running', 'error');
+                        }
+                    } catch (e) {
+                        showToast('Model', 'Switch failed', 'error');
+                    }
+                });
+            });
+        }
+
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            popover.classList.toggle('open');
+            if (popover.classList.contains('open')) renderModels();
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!popover.contains(e.target) && e.target !== btn) popover.classList.remove('open');
+        });
+    }
+
     function initPermissionToggle() {
         const btn = document.getElementById('permissionBtn');
-        if (!btn) return;
+        const popover = document.getElementById('permissionPopover');
+        const listEl = document.getElementById('permissionModeList');
+        if (!btn || !popover || !listEl) return;
 
-        btn.addEventListener('click', async () => {
-            // Cycle through modes
-            const idx = PERMISSION_MODES.findIndex(m => m.value === currentPermissionMode);
-            const next = PERMISSION_MODES[(idx + 1) % PERMISSION_MODES.length];
-            try {
-                const resp = await fetch(`/api/instances/${currentInstance}/permission-mode`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ mode: next.value }),
+        function renderModes() {
+            listEl.innerHTML = PERMISSION_MODES.map(m => {
+                const active = m.value === currentPermissionMode;
+                return `<div class="context-stat-row permission-mode-row${active ? ' active' : ''}" data-mode="${m.value}" style="cursor:pointer;padding:5px 8px;border-radius:4px;${active ? 'background:var(--accent-muted);color:var(--accent-primary);font-weight:500' : ''}">
+                    <span><strong>${m.short}</strong> <span style="color:var(--text-muted);font-size:11px">${m.label}</span></span>
+                    ${active ? '<span style="font-size:12px">&#10003;</span>' : ''}
+                </div>`;
+            }).join('');
+
+            listEl.querySelectorAll('[data-mode]').forEach(row => {
+                row.addEventListener('click', async () => {
+                    const mode = row.dataset.mode;
+                    if (mode === currentPermissionMode) return;
+                    try {
+                        const resp = await fetch(`/api/instances/${currentInstance}/permission-mode`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ mode }),
+                        });
+                        if (resp.ok) {
+                            currentPermissionMode = mode;
+                            const modeInfo = PERMISSION_MODES.find(m => m.value === mode);
+                            btn.title = `Permission: ${modeInfo?.short}`;
+                            const pillLabel = document.getElementById('permissionLabel');
+                            if (pillLabel) pillLabel.textContent = modeInfo?.short || mode;
+                            renderModes();
+                            popover.classList.remove('open');
+                            showToast('Permission', `${modeInfo?.short}: ${modeInfo?.label}`, 'info', 1500);
+                        } else {
+                            showToast('Permission', 'Instance not running', 'error');
+                        }
+                    } catch (e) {
+                        showToast('Permission', 'Switch failed', 'error');
+                    }
                 });
-                if (resp.ok) {
-                    currentPermissionMode = next.value;
-                    btn.title = `Permission: ${next.label}`;
-                    btn.classList.toggle('active', next.value !== 'bypassPermissions');
-                    showToast('Permission', `Mode: ${next.label}`, 'info', 1500);
-                }
-            } catch (e) {
-                showToast('Permission', 'Switch failed', 'error');
-            }
+            });
+        }
+
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            popover.classList.toggle('open');
+            if (popover.classList.contains('open')) renderModes();
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!popover.contains(e.target) && e.target !== btn) popover.classList.remove('open');
         });
     }
 
@@ -3757,11 +3888,20 @@
             return;
         }
 
-        // Convert HH:MM + repeat into a cron/interval expression
+        // Convert HH:MM + repeat into a schedule expression
         const [hours, minutes] = time.split(':');
-        const expression = repeat
-            ? `${parseInt(minutes)} ${parseInt(hours)} * * *`   // cron: daily at HH:MM
-            : `${parseInt(minutes)} ${parseInt(hours)} * * *`;  // same cron, one-shot handled by removing after fire
+        let expression;
+        if (repeat) {
+            expression = `${parseInt(minutes)} ${parseInt(hours)} * * *`;  // cron: daily at HH:MM
+        } else {
+            // One-shot: calculate delay from now
+            const now = new Date();
+            const target = new Date();
+            target.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+            if (target <= now) target.setDate(target.getDate() + 1);
+            const delayMinutes = Math.max(1, Math.ceil((target - now) / 60000));
+            expression = `after ${delayMinutes} minutes`;
+        }
 
         const scheduleId = `web-${Date.now()}`;
 
@@ -4041,16 +4181,17 @@
 
         // Context indicator
         initContextIndicator();
+        initModelSelector();
         initMcpPanel();
         initPermissionToggle();
 
-        // Observe for new messages to enhance code blocks
-        const observer = new MutationObserver((mutations) => {
-            mutations.forEach(() => {
-                enhanceCodeBlocks();
-            });
+        // Observe for new messages to enhance code blocks (debounced to avoid perf issues during streaming)
+        let _enhanceDebounceTimer = null;
+        const observer = new MutationObserver(() => {
+            if (_enhanceDebounceTimer) clearTimeout(_enhanceDebounceTimer);
+            _enhanceDebounceTimer = setTimeout(() => enhanceCodeBlocks(), 500);
         });
-        observer.observe(elements.messagesWrapper, { childList: true, subtree: true });
+        observer.observe(elements.messagesWrapper, { childList: true });
 
         console.log('Claude Agent Chat initialized');
     }

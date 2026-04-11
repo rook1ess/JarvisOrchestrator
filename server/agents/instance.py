@@ -16,6 +16,7 @@ from claude_agent_sdk import (
     ResultMessage,
     SystemMessage,
     RateLimitEvent,
+    HookMatcher,
 )
 from claude_agent_sdk.types import StreamEvent
 
@@ -55,6 +56,8 @@ class AgentInstance:
         self._interrupted = False
         self._pending_clear = False  # 标记：当前消息处理完后清除 session
         self._pending_restart = False  # 标记：当前消息处理完后重启（保留 session）
+        self._pending_session: object = _UNSET  # 延迟切换 session（_UNSET=无变更, None=新session, str=指定session）
+        self._lifecycle_lock = asyncio.Lock()  # 保护 start/stop/restart 并发
         self._mcp_toggles: dict[str, bool] = {}  # 运行时 MCP 开关覆盖
         self._queue_worker_task = None
         self._task_manager = None  # injected
@@ -130,9 +133,8 @@ class AgentInstance:
 
     async def start(self, resume_session: str = None):
         """启动 SDK 客户端"""
-        # Pre-flight: 检查 resume session 的 JSONL 是否存在
-        # SDK 的 session 验证是 lazy 的（start 成功，query 时才失败），
-        # 所以必须在启动前验证
+        # Pre-flight: 检查 resume session 的 JSONL 是否存在（必须在 acquire 之前，
+        # 否则 acquire 注册了不存在的 session 导致 registry 泄漏）
         if resume_session and not self._session_jsonl_exists(resume_session):
             print(f"[Instance:{self.instance_id}] Session {resume_session[:8]}... 的 JSONL 不存在，改为新 session")
             resume_session = None
@@ -156,29 +158,29 @@ class AgentInstance:
         mcp_enabled = config.get("mcp_enabled", False)
         if mcp_enabled:
             setting_sources = ["user", "project"]
-            mcp_servers = config.get("mcp_servers")
+            mcp_servers_config = config.get("mcp_servers")
 
-            # 如果是文件路径字符串，始终加载为 dict 再传给 SDK
-            # 避免 CLI 用 cwd 解析相对路径时找不到文件
-            if isinstance(mcp_servers, str):
-                mcp_servers = self._load_mcp_servers_from_file(mcp_servers)
+            # setting_sources 让 CLI 从 CWD 的项目目录和用户配置发现 MCP servers
+            # 但如果配置指定了额外的 MCP 文件路径（如 .mcp.json），CWD 可能不在同一个目录
+            # 需要显式加载并传给 SDK，确保这些 server 始终可用
+            if isinstance(mcp_servers_config, str):
+                mcp_servers = self._load_mcp_servers_from_file(mcp_servers_config)
+            elif isinstance(mcp_servers_config, dict):
+                mcp_servers = mcp_servers_config
+            else:
+                mcp_servers = None
 
-            # 支持过滤 MCP 服务器
-            mcp_only = config.get("mcp_servers_only")  # 白名单：只启用这些
-            mcp_disabled = set(config.get("mcp_servers_disabled", []))  # 黑名单：禁用这些
-
-            # 应用运行时 MCP 开关覆盖
+            # 收集需要启动后禁用的 server 列表
+            self._mcp_disabled_on_start = set(config.get("mcp_servers_disabled", []))
             for name, enabled in self._mcp_toggles.items():
                 if enabled:
-                    mcp_disabled.discard(name)
+                    self._mcp_disabled_on_start.discard(name)
                 else:
-                    mcp_disabled.add(name)
-
-            if (mcp_only or mcp_disabled) and isinstance(mcp_servers, dict):
-                mcp_servers = self._filter_mcp_servers(mcp_servers, mcp_only, list(mcp_disabled))
+                    self._mcp_disabled_on_start.add(name)
         else:
             setting_sources = []
             mcp_servers = None
+            self._mcp_disabled_on_start = set()
 
         # Bash 沙箱配置
         sandbox_config = config.get("sandbox")
@@ -188,8 +190,17 @@ class AgentInstance:
         # When bypassing permissions, all tools are available — skip whitelist
         allowed_tools = [] if permission_mode == "bypassPermissions" else config.get("allowed_tools", [])
 
+        # 全局信息通过 system_prompt append 注入（只发一次，不随消息重复）
+        static_context = f"\n\n---\n实例: {self.instance_id} | 端口: {SERVER_PORT} | API: http://localhost:{SERVER_PORT}"
+
+        raw_prompt = config.get("system_prompt", "")
+        if isinstance(raw_prompt, dict):
+            system_prompt = raw_prompt  # 已经是 preset/file 格式
+        else:
+            system_prompt = (raw_prompt + static_context) if raw_prompt else static_context
+
         options = ClaudeAgentOptions(
-            system_prompt=config.get("system_prompt", ""),
+            system_prompt=system_prompt,
             allowed_tools=allowed_tools,
             agents=subagents if subagents else None,
             mcp_servers=mcp_servers,
@@ -201,7 +212,9 @@ class AgentInstance:
             sandbox=sandbox_config,
             cwd=cwd,
             include_partial_messages=True,
-            # 不设 CLAUDE_CONFIG_DIR，SDK 直接用 ~/.claude，session 与 CLI 共享
+            hooks={
+                "UserPromptSubmit": [HookMatcher(hooks=[self._build_prompt_hook()])],
+            },
         )
 
         # Optional resource limits from config
@@ -214,6 +227,15 @@ class AgentInstance:
         self.client = await self._client_context.__aenter__()
         self.current_session_id = resume_session
         self._queue_worker_task = asyncio.create_task(self._queue_worker())
+
+        # 启动后禁用配置中标记为 disabled 的 MCP servers
+        if self._mcp_disabled_on_start:
+            for name in self._mcp_disabled_on_start:
+                try:
+                    await self.client.toggle_mcp_server(name, False)
+                    print(f"[Instance:{self.instance_id}] MCP disabled: {name}")
+                except Exception as e:
+                    print(f"[Instance:{self.instance_id}] MCP disable failed ({name}): {e}")
 
         label = f"恢复 session: {resume_session[:8]}..." if resume_session else "新 session"
         print(f"[Instance:{self.instance_id}] 已启动 ({label})")
@@ -245,12 +267,27 @@ class AgentInstance:
         - 传 None：创建全新 session
         - 传 session_id：恢复指定 session
         """
-        if resume_session is _UNSET:
-            session_to_resume = self.current_session_id
+        async with self._lifecycle_lock:
+            if resume_session is _UNSET:
+                session_to_resume = self.current_session_id
+            else:
+                session_to_resume = resume_session
+            await self.stop()
+            try:
+                await self.start(session_to_resume)
+            except Exception:
+                self.client = None  # 标记为死亡，让健康检查器处理
+                raise
+
+    def schedule_session_switch(self, session_id):
+        """延迟切换 session — 不立即重启，等当前消息处理完或下一条消息时生效。
+        传 None 表示新建 session，传 session_id 表示恢复指定 session。
+        """
+        self._pending_session = session_id
+        if self.is_processing:
+            print(f"[Agent:{self.instance_id}] Session 切换已排队（等待当前消息完成）: {session_id}")
         else:
-            session_to_resume = resume_session
-        await self.stop()
-        await self.start(session_to_resume)
+            print(f"[Agent:{self.instance_id}] Session 切换已排队（下条消息时生效）: {session_id}")
 
     async def enqueue(self, message: str, source: str = "user",
                       attachments: List[dict] = None,
@@ -275,43 +312,36 @@ class AgentInstance:
             except Exception:
                 pass
 
-    def _build_system_status(self) -> str:
-        lines = ['<system-status hint="系统自动添加，供监控任务进度，无需针对此项回复">']
-        lines.append(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        lines.append(f"服务端口: {SERVER_PORT}")
-        lines.append(f"当前实例: {self.instance_id}")
-        lines.append(f"API 基址: http://localhost:{SERVER_PORT}")
+    def _build_hook_context(self) -> str:
+        """构建 UserPromptSubmit hook 注入的动态上下文（时间 + 任务列表）"""
+        lines = [f"[时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]"]
 
         if self._task_manager:
             tasks = self._task_manager.get_all_tasks()
             if tasks:
-                lines.append(f"运行中的任务 ({len(tasks)}):")
+                lines.append(f"[运行中的任务 ({len(tasks)}):")
                 for t in tasks:
                     progress_str = f"{t.get('progress', 0)}/{t.get('total_steps', '?')}" if t.get('total_steps') else "进行中"
                     remaining = t.get('remaining_seconds', 0)
                     remaining_min = remaining // 60 if remaining else 0
                     lines.append(f"  - [{t['task_id']}] {t.get('description', '无描述')} | 进度: {progress_str} | {remaining_min}分钟后检查")
-            else:
-                lines.append("运行中的任务: 无")
+                lines.append("]")
 
-        # 兄弟实例列表
-        if self._agent_manager:
-            siblings = []
-            for iid, inst in self._agent_manager.get_all_instances().items():
-                if iid != self.instance_id:
-                    status = "处理中" if inst.is_processing else "空闲"
-                    siblings.append(f"  - {iid} ({status})")
-            if siblings:
-                lines.append(f"其他实例 ({len(siblings)}):")
-                lines.extend(siblings)
-                lines.append("提示: 可通过 jarvis_send_message 工具向其他实例发消息")
-
-        queue_size = self.message_queue.qsize()
-        if queue_size > 0:
-            lines.append(f"消息队列: {queue_size} 条待处理")
-
-        lines.append("</system-status>")
         return "\n".join(lines)
+
+    def _build_prompt_hook(self):
+        """创建 UserPromptSubmit hook 回调，每条消息注入动态上下文"""
+        instance = self  # closure capture
+
+        async def on_prompt_submit(input_data, tool_use_id, context):
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": instance._build_hook_context(),
+                }
+            }
+
+        return on_prompt_submit
 
     def schedule_clear(self):
         """标记：当前消息处理完后清除 session，开启全新对话"""
@@ -400,8 +430,20 @@ class AgentInstance:
     async def _queue_worker(self):
         print(f"[Agent:{self.instance_id}] 队列处理器已启动")
         while True:
+            item = None
             try:
                 item = await self.message_queue.get()
+
+                # 在处理消息前，检查是否需要切换 session
+                if self._pending_session is not _UNSET:
+                    target_session = self._pending_session
+                    self._pending_session = _UNSET
+                    print(f"[Agent:{self.instance_id}] 执行延迟 session 切换: {target_session}")
+                    try:
+                        await self.restart(resume_session=target_session)
+                    except Exception as e:
+                        print(f"[Agent:{self.instance_id}] Session 切换失败: {e}")
+
                 try:
                     await self._process_message(
                         message=item["message"],
@@ -410,6 +452,16 @@ class AgentInstance:
                         response_callback=item.get("response_callback"),
                         message_id=item.get("message_id"),
                     )
+                except asyncio.CancelledError:
+                    # restart() 导致的取消 — 通知前端
+                    cb = item.get("response_callback")
+                    if cb:
+                        try:
+                            await cb({"type": "cancelled", "message_id": item.get("message_id")},
+                                     {"instance_id": self.instance_id, "source": item.get("source", "")})
+                        except Exception:
+                            pass
+                    raise
                 except Exception as e:
                     if _is_dead_client_error(e):
                         print(f"[Agent:{self.instance_id}] 检测到客户端死亡: {e}")
@@ -421,23 +473,38 @@ class AgentInstance:
                 # 检查是否需要清除 session
                 if self._pending_clear:
                     self._pending_clear = False
+                    self._pending_restart = False
                     print(f"[Agent:{self.instance_id}] 执行 session 清除...")
                     await self.restart(resume_session=None)
                     if self._agent_manager:
                         self._agent_manager.clear_instance_config_key(self.instance_id, "last_session_id")
                     print(f"[Agent:{self.instance_id}] 新 session 已就绪")
 
+                # 检查延迟 session 切换（消息处理完后执行）
+                elif self._pending_session is not _UNSET:
+                    target_session = self._pending_session
+                    self._pending_session = _UNSET
+                    print(f"[Agent:{self.instance_id}] 执行延迟 session 切换: {target_session}")
+                    await self.restart(resume_session=target_session)
+
                 # 检查是否需要重启（保留 session，重载配置）
-                if self._pending_restart:
+                elif self._pending_restart:
                     self._pending_restart = False
                     print(f"[Agent:{self.instance_id}] 执行延迟重启...")
-                    await self.restart()  # 不传参 = 保留当前 session
+                    await self.restart()
                     print(f"[Agent:{self.instance_id}] 重启完成，配置已重载")
             except asyncio.CancelledError:
                 print(f"[Agent:{self.instance_id}] 队列处理器已停止")
                 break
             except Exception as e:
                 print(f"[Agent:{self.instance_id}] 队列处理器错误: {e}")
+                cb = item.get("response_callback") if item else None
+                if cb:
+                    try:
+                        await cb({"type": "error", "message": str(e), "message_id": item.get("message_id")},
+                                 {"instance_id": self.instance_id, "source": item.get("source", "")})
+                    except Exception:
+                        pass
 
     async def _recover_and_retry(self, item: dict):
         """客户端死亡后：重启新 session 并重试消息"""
@@ -480,7 +547,6 @@ class AgentInstance:
 
             await emit({"type": "user_message", "content": message, "source": source})
 
-            system_status = self._build_system_status()
             query_start = time.time()
             print(f"[Agent:{self.instance_id}] 发送 query...")
 
@@ -513,8 +579,7 @@ class AgentInstance:
                             "text": f"[文件: {file_name}]\n```\n{file_content}\n```"
                         })
 
-                text_content = f"{system_status}\n\n{message}" if message else system_status
-                content_blocks.append({"type": "text", "text": text_content})
+                content_blocks.append({"type": "text", "text": message or ""})
 
                 async def multimodal_prompt():
                     yield {
@@ -525,8 +590,7 @@ class AgentInstance:
 
                 await self.client.query(multimodal_prompt())
             else:
-                full_message = f"{system_status}\n\n{message}"
-                await self.client.query(full_message)
+                await self.client.query(message)
 
             msg_count = 0
             last_msg_time = time.time()

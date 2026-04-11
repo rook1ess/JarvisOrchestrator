@@ -15,7 +15,7 @@ from server.channels.qq import QQChannel
 from server.router import MessageRouter
 
 from server.api import pages, sessions, tasks, status, instances
-from server.mcp_server import mcp as mcp_server, init as mcp_init, _browser_manager
+from server.mcp_server import mcp as mcp_server, init as mcp_init, shutdown as mcp_shutdown
 
 # 预先创建 MCP streamable HTTP app（触发 session_manager 的 lazy init）
 _mcp_app = mcp_server.streamable_http_app()
@@ -59,9 +59,8 @@ async def _fire_scheduled(message: str, instance_id: str = None):
     inst = agent_manager.get_instance(target_id)
     if not inst:
         # 按需创建实例（_ensure_instance 需要 route dict）
-        route = message_router.resolve(
-            message_router.get_channel_type_for_instance(target_id),
-        ) or {"instance_id": target_id}
+        channel_type = message_router.get_channel_type_for_instance(target_id)
+        route = message_router.resolve(channel_type) or {"instance_id": target_id, "channel": channel_type}
         inst = await message_router._ensure_instance(route)
     if not inst:
         print(f"[Scheduler] 无法获取实例 {target_id}，跳过")
@@ -92,7 +91,7 @@ async def lifespan(app: FastAPI):
         yield
 
     # 关闭
-    await _browser_manager.close_all()
+    await mcp_shutdown()
     await scheduler.stop()
     await agent_manager.stop_health_checker()
     await task_manager.stop_checker()
@@ -169,9 +168,5 @@ async def websocket_chat(websocket: WebSocket, instance: str = "ws-default"):
         print(f"[WS] 错误: {e}")
     finally:
         ws_channel.unsubscribe(instance_id, websocket)
-        # 所有浏览器断开时中断处理
-        if ws_channel.get_subscriber_count(instance_id) == 0:
-            inst = agent_manager.get_instance(instance_id)
-            if inst and inst.is_processing:
-                print("[WS] 所有浏览器断开，中断当前消息处理")
-                await inst.interrupt()
+        # 所有浏览器断开时：不再自动中断，因为非浏览器来源的消息（scheduler/callback）不应被中断
+        # 如果需要中断，用户可以在重连后手动取消

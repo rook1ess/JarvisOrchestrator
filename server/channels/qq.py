@@ -224,6 +224,8 @@ class QQChannel(Channel):
         msg_type = data.get("type")
         if msg_type == "text":
             ctx["chunks"].append(data.get("content", ""))
+        elif msg_type == "text_delta":
+            ctx["chunks"].append(data.get("content", ""))
         elif msg_type in ("done", "cancelled", "error"):
             # 合并发送
             if ctx["chunks"]:

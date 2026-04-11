@@ -24,6 +24,12 @@ _message_router = None
 # 浏览器管理器单例（lazy init）
 _browser_manager = BrowserManager()
 
+
+async def shutdown():
+    """清理 MCP Server 资源（供 main.py lifespan 调用）"""
+    await _browser_manager.close_all()
+
+
 # 容器配置（可通过环境变量覆盖）
 CONTAINER_NAME = os.environ.get("JARVIS_CONTAINER_NAME", "claude-dev")
 HOST_PROJECTS = os.environ.get("JARVIS_HOST_PROJECTS", "/Users/huang/Projects/Jarvis-Work")
@@ -343,7 +349,7 @@ async def jarvis_spawn_task(
         use_container: True 用 Docker 容器模式（推荐），False 用本地模式
         instance_id: 发起任务的实例 ID，用于超时通知路由
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def _do_spawn():
         # 1. 确认 tmux session 不存在
@@ -463,7 +469,7 @@ async def jarvis_check_output(task_id: str, lines: int = 100) -> dict:
         task_id: tmux session 名 / 任务 ID
         lines: 捕获最近多少行输出，默认 100
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def _do():
         # 检查 session 是否存在
@@ -492,7 +498,7 @@ async def jarvis_send_input(task_id: str, text: str, extra_enters: int = 2) -> d
         text: 要发送的文本内容
         extra_enters: 额外按 Enter 的次数，默认 2 次，确保消息送达
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def _do():
         check = subprocess.run(
@@ -520,7 +526,7 @@ async def jarvis_kill_task(task_id: str) -> dict:
     Args:
         task_id: tmux session 名 / 任务 ID
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def _do():
         result = subprocess.run(
@@ -546,7 +552,7 @@ async def jarvis_kill_task(task_id: str) -> dict:
 @mcp.tool()
 async def jarvis_list_tasks() -> dict:
     """列出所有活跃的 tmux 子任务，包括 tmux session 状态和服务器注册的任务信息。"""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def _get_tmux_sessions():
         try:
@@ -576,13 +582,16 @@ async def jarvis_list_tasks() -> dict:
 # ============== 任务完成 ==============
 
 @mcp.tool()
-async def jarvis_complete_task(task_id: str, kill_tmux: bool = True) -> dict:
-    """标记任务为已完成并归档。这是唯一将任务标记为"完成"的方式——由父实例主动调用。
-    可选同时终止对应的 tmux session。
+async def jarvis_complete_task(task_id: str, kill_tmux: bool = False) -> dict:
+    """标记任务为已完成并归档，从活跃任务列表中移除。
+
+    注意 kill_tmux 的使用场景：
+    - 多阶段任务（如迭代开发）：保持 kill_tmux=False，子进程保留上下文用于后续轮次
+    - 多阶段任务的最后一轮（确保子进程完全完成生命周期后）或单次调用任务：设 kill_tmux=True 释放资源
 
     Args:
         task_id: 任务 ID
-        kill_tmux: 是否同时终止 tmux session，默认 True
+        kill_tmux: 是否同时终止 tmux session，默认 False（保留子进程）
     """
     if not _task_manager:
         return {"status": "error", "message": "TaskManager not available"}
@@ -593,7 +602,7 @@ async def jarvis_complete_task(task_id: str, kill_tmux: bool = True) -> dict:
 
     tmux_killed = False
     if kill_tmux:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         def _kill():
             result = subprocess.run(
                 ["tmux", "kill-session", "-t", task_id], capture_output=True
