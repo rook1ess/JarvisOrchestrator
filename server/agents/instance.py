@@ -10,10 +10,12 @@ from claude_agent_sdk import (
     ClaudeSDKClient,
     AssistantMessage,
     TextBlock,
+    ThinkingBlock,
     ToolUseBlock,
     ToolResultBlock,
     ResultMessage,
     SystemMessage,
+    RateLimitEvent,
 )
 from claude_agent_sdk.types import StreamEvent
 
@@ -193,6 +195,7 @@ class AgentInstance:
             mcp_servers=mcp_servers,
             permission_mode=permission_mode,
             model=config.get("model", "opus"),
+            effort=config.get("effort", "max"),
             setting_sources=setting_sources,
             resume=resume_session,
             sandbox=sandbox_config,
@@ -251,7 +254,8 @@ class AgentInstance:
 
     async def enqueue(self, message: str, source: str = "user",
                       attachments: List[dict] = None,
-                      response_callback: Callable = None):
+                      response_callback: Callable = None,
+                      message_id: str = None):
         """将消息加入处理队列"""
         self.last_active_at = time.time()
         await self.message_queue.put({
@@ -259,6 +263,7 @@ class AgentInstance:
             "source": source,
             "attachments": attachments,
             "response_callback": response_callback,
+            "message_id": message_id,
         })
         print(f"[Agent:{self.instance_id}] 消息入队 (队列长度: {self.message_queue.qsize()})")
 
@@ -374,6 +379,24 @@ class AgentInstance:
             await self.client.rewind_files(user_message_id)
             print(f"[Agent:{self.instance_id}] Files rewound to: {user_message_id}")
 
+    async def sdk_get_context_usage(self) -> dict | None:
+        """Get detailed context window usage from SDK"""
+        if self.client:
+            return await self.client.get_context_usage()
+        return None
+
+    async def sdk_toggle_mcp(self, server_name: str, enabled: bool):
+        """Toggle MCP server at runtime without restart"""
+        if self.client:
+            await self.client.toggle_mcp_server(server_name, enabled)
+            print(f"[Agent:{self.instance_id}] MCP '{server_name}' → {'enabled' if enabled else 'disabled'}")
+
+    async def sdk_set_permission_mode(self, mode: str):
+        """Switch permission mode at runtime"""
+        if self.client:
+            await self.client.set_permission_mode(mode)
+            print(f"[Agent:{self.instance_id}] Permission mode → {mode}")
+
     async def _queue_worker(self):
         print(f"[Agent:{self.instance_id}] 队列处理器已启动")
         while True:
@@ -385,6 +408,7 @@ class AgentInstance:
                         source=item["source"],
                         attachments=item.get("attachments"),
                         response_callback=item.get("response_callback"),
+                        message_id=item.get("message_id"),
                     )
                 except Exception as e:
                     if _is_dead_client_error(e):
@@ -427,19 +451,23 @@ class AgentInstance:
                 source=item["source"],
                 attachments=item.get("attachments"),
                 response_callback=item.get("response_callback"),
+                message_id=item.get("message_id"),
             )
         except Exception as e2:
             print(f"[Agent:{self.instance_id}] 恢复失败: {e2}")
 
     async def _process_message(self, message: str, source: str = "user",
                                 attachments: List[dict] = None,
-                                response_callback: Callable = None):
+                                response_callback: Callable = None,
+                                message_id: str = None):
         """处理单条消息"""
         if not self.client:
             print(f"[Agent:{self.instance_id}] 客户端未启动")
             return
 
         async def emit(data: dict):
+            if message_id:
+                data["message_id"] = message_id
             if response_callback:
                 await response_callback(data, {"instance_id": self.instance_id, "source": source})
 
@@ -593,6 +621,16 @@ class AgentInstance:
                         "duration_ms": msg.duration_ms,
                         "num_turns": msg.num_turns,
                         "usage": msg.usage,
+                    })
+                elif isinstance(msg, RateLimitEvent):
+                    info = msg.rate_limit_info
+                    print(f"[Agent:{self.instance_id}] msg#{msg_count} RateLimit +{gap:.1f}s")
+                    await emit({
+                        "type": "rate_limit",
+                        "info": {
+                            "type": getattr(info, "type", None),
+                            "retry_after_ms": getattr(info, "retry_after_ms", None),
+                        },
                     })
 
             if self._interrupted:

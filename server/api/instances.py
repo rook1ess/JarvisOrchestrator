@@ -265,6 +265,54 @@ async def get_instance_mcp_status(instance_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class McpToggleRequest(BaseModel):
+    server_name: str
+    enabled: bool
+
+
+@router.post("/api/instances/{instance_id}/mcp-toggle")
+async def toggle_instance_mcp(instance_id: str, req: McpToggleRequest):
+    """运行时切换 MCP server 开关，无需重启"""
+    inst = _agent_manager.get_instance(instance_id)
+    if not inst:
+        raise HTTPException(status_code=404, detail=f"Instance '{instance_id}' not found")
+    try:
+        await inst.sdk_toggle_mcp(req.server_name, req.enabled)
+        return {"status": "ok", "server_name": req.server_name, "enabled": req.enabled}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/instances/{instance_id}/context-usage")
+async def get_instance_context_usage(instance_id: str):
+    """获取实例的上下文窗口使用情况"""
+    inst = _agent_manager.get_instance(instance_id)
+    if not inst:
+        raise HTTPException(status_code=404, detail=f"Instance '{instance_id}' not found")
+    try:
+        result = await inst.sdk_get_context_usage()
+        return {"status": "ok", "instance_id": instance_id, "context_usage": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class SetPermissionModeRequest(BaseModel):
+    mode: str
+
+
+@router.post("/api/instances/{instance_id}/permission-mode")
+async def set_instance_permission_mode(instance_id: str, req: SetPermissionModeRequest):
+    """运行时切换权限模式"""
+    inst = _agent_manager.get_instance(instance_id)
+    if not inst:
+        raise HTTPException(status_code=404, detail=f"Instance '{instance_id}' not found")
+    try:
+        await inst.sdk_set_permission_mode(req.mode)
+        return {"status": "ok", "instance_id": instance_id, "permission_mode": req.mode}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/api/instances/{instance_id}/rewind")
 async def rewind_instance(instance_id: str, req: RewindRequest):
     """回退到指定消息时的文件状态。传入 user_message_id（来自消息历史的 message_id 字段）"""

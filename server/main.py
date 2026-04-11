@@ -58,8 +58,11 @@ async def _fire_scheduled(message: str, instance_id: str = None):
     target_id = instance_id or "ws-default"
     inst = agent_manager.get_instance(target_id)
     if not inst:
-        # 按需创建实例
-        inst = await message_router._ensure_instance(target_id)
+        # 按需创建实例（_ensure_instance 需要 route dict）
+        route = message_router.resolve(
+            message_router.get_channel_type_for_instance(target_id),
+        ) or {"instance_id": target_id}
+        inst = await message_router._ensure_instance(route)
     if not inst:
         print(f"[Scheduler] 无法获取实例 {target_id}，跳过")
         return
@@ -101,7 +104,7 @@ app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
 # ============== 注入依赖并挂载路由 ==============
 sessions.init(agent_manager, ws_channel)
-tasks.init(task_manager)
+tasks.init(task_manager, scheduler=scheduler)
 status.init(agent_manager, task_manager, ws_channel, qq_channel, message_router)
 instances.init(agent_manager, ws_channel, qq_channel=qq_channel, message_router=message_router)
 mcp_init(agent_manager, ws_channel, task_manager, scheduler=scheduler, qq_channel=qq_channel, message_router=message_router)
@@ -143,6 +146,7 @@ async def websocket_chat(websocket: WebSocket, instance: str = "ws-default"):
             if msg_type == "message":
                 message = data.get("message", "").strip()
                 attachments = data.get("attachments", [])
+                message_id = data.get("message_id")
                 if message or attachments:
                     # 第一条消息时按需创建实例（route_message 内部 _ensure_instance）
                     await message_router.route_message(
@@ -151,6 +155,7 @@ async def websocket_chat(websocket: WebSocket, instance: str = "ws-default"):
                         message=message,
                         context={"instance_id": instance_id, "source": "browser"},
                         attachments=attachments if attachments else None,
+                        message_id=message_id,
                     )
 
             elif msg_type == "cancel":

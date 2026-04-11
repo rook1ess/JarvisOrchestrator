@@ -9,11 +9,13 @@ from server.tasks.models import TaskRegisterData, TaskProgressData, TaskRenewDat
 router = APIRouter()
 
 _task_manager = None
+_scheduler = None
 
 
-def init(task_manager):
-    global _task_manager
+def init(task_manager, scheduler=None):
+    global _task_manager, _scheduler
     _task_manager = task_manager
+    _scheduler = scheduler
 
 
 @router.post("/task/register")
@@ -108,3 +110,47 @@ async def kill_spawn_task(task_id: str):
     killed = await loop.run_in_executor(None, _do)
     await _task_manager.remove_async(task_id)
     return {"status": "ok", "task_id": task_id, "session_killed": killed}
+
+
+# ============== Scheduled Tasks REST API ==============
+
+from pydantic import BaseModel
+from typing import Optional
+
+
+class ScheduledTaskData(BaseModel):
+    schedule_id: str
+    expression: str
+    message: str
+    instance_id: Optional[str] = None
+
+
+@router.get("/api/scheduled-tasks")
+async def list_scheduled_tasks():
+    """列出所有定时任务"""
+    if not _scheduler:
+        return {"tasks": []}
+    return {"tasks": _scheduler.list_all()}
+
+
+@router.post("/api/scheduled-tasks")
+async def create_scheduled_task(data: ScheduledTaskData):
+    """创建定时任务"""
+    if not _scheduler:
+        raise HTTPException(status_code=503, detail="Scheduler not available")
+    try:
+        task = _scheduler.register(data.schedule_id, data.expression, data.message, data.instance_id)
+        return {"status": "ok", "task": task}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/api/scheduled-tasks/{schedule_id}")
+async def cancel_scheduled_task(schedule_id: str):
+    """取消定时任务"""
+    if not _scheduler:
+        raise HTTPException(status_code=503, detail="Scheduler not available")
+    task = _scheduler.cancel(schedule_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Scheduled task '{schedule_id}' not found")
+    return {"status": "ok", "cancelled": task}

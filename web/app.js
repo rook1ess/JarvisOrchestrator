@@ -205,6 +205,7 @@
         toolsContainer: null,
         textContainer: null,
         fullContent: '',
+        currentMessageId: null,  // message_id of the message we're waiting for a response to
         attachments: [],  // Store pending attachments
         tasks: [],  // Active tasks list
         bookmarks: [],  // Bookmarked messages
@@ -1728,8 +1729,18 @@
         };
     }
 
+    function _isForCurrentMessage(data) {
+        // If the event has a message_id, it must match our current one.
+        // Events without message_id (legacy/system) are accepted when no browser message is pending.
+        if (data.message_id && state.currentMessageId) {
+            return data.message_id === state.currentMessageId;
+        }
+        // No message_id on event → accept only if no browser message is pending
+        return !state.currentMessageId;
+    }
+
     function handleMessage(data) {
-        console.log('Received:', data.type);
+        console.log('Received:', data.type, data.message_id ? `(msg:${data.message_id.slice(0,8)})` : '');
 
         switch (data.type) {
             case 'connected':
@@ -1741,6 +1752,12 @@
             case 'user_message':
                 // 系统通知（来自回调或超时）
                 if (data.source !== 'browser') {
+                    // If a browser message is pending, skip UI for system messages
+                    // (they still process on backend, just no UI disruption)
+                    if (state.currentMessageId && data.message_id !== state.currentMessageId) {
+                        console.log('Skipping system message UI — browser message pending', data.message_id?.slice(0,8));
+                        break;
+                    }
                     // 隐藏欢迎消息
                     if (elements.welcomeMessage) {
                         elements.welcomeMessage.classList.add('hidden');
@@ -1761,6 +1778,7 @@
 
             case 'text_delta':
                 // Primary text path: streaming token-by-token
+                if (!_isForCurrentMessage(data)) break;
                 if (state.textContainer) {
                     // Clear loading indicator on first delta
                     if (state.fullContent === '' && !currentTypewriter) {
@@ -1803,6 +1821,7 @@
 
             case 'text':
                 // Fallback: full text from AssistantMessage (when streaming didn't send it)
+                if (!_isForCurrentMessage(data)) break;
                 if (state.textContainer) {
                     if (state.fullContent === '' && !currentTypewriter) {
                         state.textContainer.innerHTML = '';
@@ -1844,6 +1863,7 @@
 
             case 'tool_start':
                 // Tool announced via streaming before execution
+                if (!_isForCurrentMessage(data)) break;
                 if (state.toolsContainer) {
                     addToolIndicator(state.toolsContainer, data.name);
                     setStatus('busy', `Using ${cleanToolName(data.name)}...`);
@@ -1853,6 +1873,7 @@
             case 'tool':
                 // Tool confirmation from AssistantMessage (after streaming)
                 // tool_start already added it via streaming, so skip duplicate
+                if (!_isForCurrentMessage(data)) break;
                 if (state.toolsContainer) {
                     setStatus('busy', `Using ${cleanToolName(data.name)}...`);
                 }
@@ -1860,6 +1881,7 @@
 
             case 'tool_result':
                 // Tool execution completed — update summary style if error
+                if (!_isForCurrentMessage(data)) break;
                 if (state.toolsContainer && data.is_error) {
                     state.toolsContainer.classList.add('has-error');
                 }
@@ -1867,12 +1889,41 @@
 
             case 'text_start':
             case 'block_stop':
+                if (!_isForCurrentMessage(data)) break;
+                break;
+
             case 'thinking_delta':
-                // No-op for now (thinking_delta could be rendered in future)
+                if (!_isForCurrentMessage(data)) break;
+                if (state.toolsContainer) {
+                    // Create or find thinking container inside tools area
+                    let thinkingEl = state.toolsContainer.querySelector('.thinking-block');
+                    if (!thinkingEl) {
+                        thinkingEl = document.createElement('details');
+                        thinkingEl.className = 'thinking-block';
+                        thinkingEl.innerHTML = '<summary class="thinking-summary">Thinking...</summary><div class="thinking-content"></div>';
+                        state.toolsContainer.appendChild(thinkingEl);
+                    }
+                    const contentEl = thinkingEl.querySelector('.thinking-content');
+                    if (contentEl && data.content) {
+                        contentEl.textContent += data.content;
+                        scrollToBottom();
+                    }
+                }
+                break;
+
+            case 'rate_limit':
+                // Rate limit notification — show toast regardless of message_id
+                {
+                    const retryMs = data.info?.retry_after_ms;
+                    const retrySec = retryMs ? Math.ceil(retryMs / 1000) : '?';
+                    showToast('Rate Limited', `Retrying in ${retrySec}s...`, 'error', retryMs || 5000);
+                    setStatus('busy', `Rate limited (${retrySec}s)`);
+                }
                 break;
 
             case 'init':
                 // Init message from SDK with session/model info
+                if (!_isForCurrentMessage(data)) break;
                 console.log('Init:', data);
                 if (data.session_id) {
                     currentClaudeSessionId = data.session_id;
@@ -1884,6 +1935,7 @@
 
             case 'result':
                 // 显示本轮上下文统计
+                if (!_isForCurrentMessage(data)) break;
                 if (data.usage || data.cost_usd != null) {
                     const parts = [];
                     if (data.usage) {
@@ -1913,7 +1965,11 @@
                 break;
 
             case 'done':
-                // Message complete
+                // Message complete — only handle if for our current message
+                if (!_isForCurrentMessage(data)) {
+                    console.log('Ignoring done for non-current message', data.message_id?.slice(0,8));
+                    break;
+                }
                 state.isLoading = false;
                 updateButtonState();
                 setStatus('ready', 'Ready');
@@ -1948,10 +2004,12 @@
                 state.toolsContainer = null;
                 state.textContainer = null;
                 state.fullContent = '';
+                state.currentMessageId = null;
                 break;
 
             case 'cancelled':
                 // Generation was cancelled but context preserved
+                if (!_isForCurrentMessage(data)) break;
                 // Stop typewriter and flush remaining content
                 if (currentTypewriter) {
                     currentTypewriter.complete();
@@ -1984,10 +2042,12 @@
                 state.toolsContainer = null;
                 state.textContainer = null;
                 state.fullContent = '';
+                state.currentMessageId = null;
                 break;
 
             case 'system':
                 // 系统消息（如 compact_boundary）
+                if (!_isForCurrentMessage(data)) break;
                 console.log('System message:', data.subtype, data.data);
                 if (data.subtype === 'compact_boundary') {
                     // 显示压缩通知
@@ -2001,12 +2061,14 @@
                 break;
 
             case 'error':
+                if (!_isForCurrentMessage(data)) break;
                 if (state.currentContentEl) {
                     state.currentContentEl.innerHTML = `<p style="color: #f87171;">Error: ${escapeHtml(data.message)}</p>`;
                 }
                 state.isLoading = false;
                 updateButtonState();
                 setStatus('error', 'Error');
+                state.currentMessageId = null;
                 break;
 
             case 'task_update':
@@ -2046,7 +2108,11 @@
             return;
         }
 
+        // Generate unique message_id for correlation
+        const messageId = crypto.randomUUID();
+
         state.isLoading = true;
+        state.currentMessageId = messageId;
         updateButtonState();
         setStatus('busy', 'Thinking...');
 
@@ -2061,8 +2127,8 @@
         state.textContainer = textContainer;
         state.fullContent = '';
 
-        // Build message payload
-        const payload = { message: message };
+        // Build message payload with message_id
+        const payload = { message: message, message_id: messageId };
 
         if (attachments.length > 0) {
             payload.attachments = attachments.map(att => {
@@ -2124,6 +2190,7 @@
         state.toolsContainer = null;
         state.textContainer = null;
         state.fullContent = '';
+        state.currentMessageId = null;
 
         // Reconnect
         setTimeout(connectWebSocket, 100);
@@ -2760,20 +2827,9 @@
     // ============================================
     // Context Indicator
     // ============================================
-    // Context window size per model (input_tokens = current context size)
-    const MODEL_CONTEXT_WINDOWS = {
-        'opus': 200000,
-        'sonnet': 200000,
-        'haiku': 200000,
-        'claude-opus-4-6': 200000,
-        'claude-sonnet-4-6': 200000,
-        'claude-haiku-4-5': 200000,
-    };
-    const DEFAULT_CONTEXT_WINDOW = 200000;
-
-    let lastUsage = null;
-    let contextWindowSize = DEFAULT_CONTEXT_WINDOW;
-
+    // ============================================
+    // Context Usage (via SDK get_context_usage API)
+    // ============================================
     function initContextIndicator() {
         const btn = document.getElementById('contextBtn');
         const popover = document.getElementById('contextPopover');
@@ -2783,6 +2839,7 @@
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
             popover.classList.toggle('open');
+            if (popover.classList.contains('open')) fetchContextUsage();
         });
 
         document.addEventListener('click', (e) => {
@@ -2802,37 +2859,25 @@
                 compactBtn.textContent = 'Compact Context';
             }, 3000);
         });
-
-        // Try to detect model from instance config
-        fetchContextWindowSize();
     }
 
-    async function fetchContextWindowSize() {
+    async function fetchContextUsage() {
         try {
-            const resp = await fetch(`/api/instances/${currentInstance}/config`);
-            if (resp.ok) {
-                const data = await resp.json();
-                const model = data.merged_config?.model || 'sonnet';
-                contextWindowSize = MODEL_CONTEXT_WINDOWS[model] || DEFAULT_CONTEXT_WINDOW;
-            }
-        } catch (e) { /* ignore */ }
+            const resp = await fetch(`/api/instances/${currentInstance}/context-usage`);
+            if (!resp.ok) return;
+            const data = await resp.json();
+            const ctx = data.context_usage;
+            if (ctx) renderContextUsage(ctx);
+        } catch (e) { /* instance may not be running */ }
     }
 
-    function updateContextUsage(usage) {
-        if (!usage) return;
-        lastUsage = usage;
-
-        // input_tokens = total tokens sent to API this turn = current context size
-        const contextUsed = usage.input_tokens || 0;
-        const out = usage.output_tokens || 0;
-        const cache = usage.cache_read_input_tokens || 0;
-        const pct = Math.min(100, (contextUsed / contextWindowSize) * 100);
-
+    function renderContextUsage(ctx) {
+        const pct = ctx.percentage || 0;
         const fill = document.getElementById('contextBarFill');
         const label = document.getElementById('contextBarLabel');
-        const ctxInput = document.getElementById('ctxInput');
-        const ctxOutput = document.getElementById('ctxOutput');
-        const ctxCache = document.getElementById('ctxCache');
+        const ctxTotal = document.getElementById('ctxTotal');
+        const ctxMax = document.getElementById('ctxMax');
+        const catContainer = document.getElementById('contextCategories');
 
         if (fill) {
             fill.style.width = pct + '%';
@@ -2840,9 +2885,147 @@
                 (pct > 80 ? ' critical' : pct > 60 ? ' warn' : '');
         }
         if (label) label.textContent = Math.round(pct) + '%';
-        if (ctxInput) ctxInput.textContent = contextUsed.toLocaleString();
-        if (ctxOutput) ctxOutput.textContent = out.toLocaleString();
-        if (ctxCache) ctxCache.textContent = cache.toLocaleString();
+        if (ctxTotal) ctxTotal.textContent = (ctx.totalTokens || 0).toLocaleString();
+        if (ctxMax) ctxMax.textContent = (ctx.maxTokens || 0).toLocaleString();
+
+        if (catContainer && ctx.categories) {
+            catContainer.innerHTML = ctx.categories.map(c =>
+                `<div class="context-stat-row"><span>${c.name}</span><span>${c.tokens.toLocaleString()}</span></div>`
+            ).join('');
+        }
+    }
+
+    // Called after each result to auto-refresh the indicator label
+    function updateContextUsage(usage) {
+        if (!usage) return;
+        // Trigger a background fetch for accurate data
+        fetchContextUsage();
+    }
+
+    // ============================================
+    // MCP Server Panel
+    // ============================================
+    function initMcpPanel() {
+        const btn = document.getElementById('mcpBtn');
+        if (!btn) return;
+
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            // Toggle a popover or show a modal
+            let popover = document.getElementById('mcpPopover');
+            if (!popover) {
+                popover = document.createElement('div');
+                popover.id = 'mcpPopover';
+                popover.className = 'context-popover';
+                btn.parentElement.appendChild(popover);
+                document.addEventListener('click', (ev) => {
+                    if (!popover.contains(ev.target) && ev.target !== btn) popover.classList.remove('open');
+                });
+            }
+            popover.classList.toggle('open');
+            if (popover.classList.contains('open')) {
+                popover.innerHTML = '<div class="context-popover-title">MCP Servers</div><div style="padding:8px;color:var(--text-muted)">Loading...</div>';
+                try {
+                    const resp = await fetch(`/api/instances/${currentInstance}/mcp-status`);
+                    if (!resp.ok) { popover.innerHTML = '<div class="context-popover-title">MCP Servers</div><div style="padding:8px;color:var(--text-muted)">Instance not running</div>'; return; }
+                    const data = await resp.json();
+                    const status = data.mcp_status;
+                    renderMcpPanel(popover, status);
+                } catch (e) {
+                    popover.innerHTML = '<div class="context-popover-title">MCP Servers</div><div style="padding:8px;color:var(--text-muted)">Error loading</div>';
+                }
+            }
+        });
+    }
+
+    function renderMcpPanel(popover, status) {
+        // status is the raw SDK McpStatusResponse
+        let html = '<div class="context-popover-title">MCP Servers</div>';
+        if (!status || typeof status !== 'object') {
+            html += '<div style="padding:8px;color:var(--text-muted)">No data</div>';
+            popover.innerHTML = html;
+            return;
+        }
+        // status may have .servers or be a dict of server statuses
+        const servers = status.servers || status;
+        if (typeof servers === 'object') {
+            const entries = Array.isArray(servers) ? servers : Object.entries(servers);
+            if (entries.length === 0) {
+                html += '<div style="padding:8px;color:var(--text-muted)">No MCP servers</div>';
+            } else {
+                entries.forEach(entry => {
+                    let name, info;
+                    if (Array.isArray(entry)) {
+                        [name, info] = entry;
+                    } else {
+                        name = entry.name; info = entry;
+                    }
+                    const connected = info === 'connected' || info?.status === 'connected' || info === 'enabled';
+                    const disabled = info === 'disabled' || info?.status === 'disabled';
+                    const statusText = typeof info === 'string' ? info : (info?.status || 'unknown');
+                    const dotColor = connected ? 'var(--accent-green, #22c55e)' : disabled ? 'var(--text-muted)' : '#f59e0b';
+                    html += `<div class="context-stat-row" style="cursor:pointer" data-mcp="${escapeHtml(name)}">
+                        <span><span style="color:${dotColor};margin-right:4px">●</span>${escapeHtml(name)}</span>
+                        <label class="mcp-toggle-switch"><input type="checkbox" ${!disabled ? 'checked' : ''} data-mcp-name="${escapeHtml(name)}"><span class="mcp-toggle-slider"></span></label>
+                    </div>`;
+                });
+            }
+        }
+        popover.innerHTML = html;
+        // Bind toggle handlers
+        popover.querySelectorAll('input[data-mcp-name]').forEach(input => {
+            input.addEventListener('change', async () => {
+                const serverName = input.dataset.mcpName;
+                const enabled = input.checked;
+                try {
+                    await fetch(`/api/instances/${currentInstance}/mcp-toggle`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ server_name: serverName, enabled }),
+                    });
+                    showToast('MCP', `${serverName}: ${enabled ? 'enabled' : 'disabled'}`, 'info', 2000);
+                } catch (e) {
+                    showToast('MCP', 'Toggle failed', 'error');
+                    input.checked = !enabled;
+                }
+            });
+        });
+    }
+
+    // ============================================
+    // Permission Mode Toggle
+    // ============================================
+    const PERMISSION_MODES = [
+        { value: 'bypassPermissions', label: 'Bypass', icon: '🔓' },
+        { value: 'auto', label: 'Auto', icon: '⚡' },
+        { value: 'default', label: 'Default', icon: '🔒' },
+    ];
+    let currentPermissionMode = 'bypassPermissions';
+
+    function initPermissionToggle() {
+        const btn = document.getElementById('permissionBtn');
+        if (!btn) return;
+
+        btn.addEventListener('click', async () => {
+            // Cycle through modes
+            const idx = PERMISSION_MODES.findIndex(m => m.value === currentPermissionMode);
+            const next = PERMISSION_MODES[(idx + 1) % PERMISSION_MODES.length];
+            try {
+                const resp = await fetch(`/api/instances/${currentInstance}/permission-mode`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: next.value }),
+                });
+                if (resp.ok) {
+                    currentPermissionMode = next.value;
+                    btn.title = `Permission: ${next.label}`;
+                    btn.classList.toggle('active', next.value !== 'bypassPermissions');
+                    showToast('Permission', `Mode: ${next.label}`, 'info', 1500);
+                }
+            } catch (e) {
+                showToast('Permission', 'Switch failed', 'error');
+            }
+        });
     }
 
     // ============================================
@@ -3457,59 +3640,52 @@
     }
 
     // ============================================
-    // Scheduled Tasks Configuration
+    // Scheduled Tasks (backed by server API)
     // ============================================
-    const SCHEDULED_TASKS_KEY = 'jarvis_scheduled_tasks';
-    const SCHEDULED_TASKS_ENABLED_KEY = 'jarvis_scheduled_tasks_enabled';
-    let scheduledTaskTimers = [];
-    let scheduledTasksEnabled = false;
+    let _scheduledTasksCache = [];
 
-    function loadScheduledTasks() {
+    async function fetchScheduledTasks() {
         try {
-            const data = localStorage.getItem(SCHEDULED_TASKS_KEY);
-            if (data) {
-                return JSON.parse(data);
-            }
+            const resp = await fetch('/api/scheduled-tasks');
+            const data = await resp.json();
+            _scheduledTasksCache = data.tasks || [];
+            return _scheduledTasksCache;
         } catch (e) {
-            console.warn('Failed to load scheduled tasks:', e);
-        }
-        return [];
-    }
-
-    function saveScheduledTasks(tasks) {
-        try {
-            localStorage.setItem(SCHEDULED_TASKS_KEY, JSON.stringify(tasks));
-        } catch (e) {
-            console.warn('Failed to save scheduled tasks:', e);
+            console.warn('Failed to fetch scheduled tasks:', e);
+            return _scheduledTasksCache;
         }
     }
 
-    function renderScheduledTasks() {
+    function _formatExpression(task) {
+        // Show human-readable schedule info
+        const expr = task.expression || '';
+        if (task.seconds_until_next != null) {
+            const mins = Math.round(task.seconds_until_next / 60);
+            return `${expr} (${mins}m)`;
+        }
+        return expr;
+    }
+
+    function renderScheduledTasks(tasks) {
         const list = document.getElementById('scheduledTaskList');
         if (!list) return;
 
-        const tasks = loadScheduledTasks();
+        tasks = tasks || _scheduledTasksCache;
 
         if (tasks.length === 0) {
             list.innerHTML = '<div class="drawer-empty-state">No scheduled tasks</div>';
             return;
         }
 
-        list.innerHTML = tasks.map((task, index) => `
-            <div class="scheduled-task-item" data-index="${index}">
+        list.innerHTML = tasks.map(task => `
+            <div class="scheduled-task-item" data-id="${escapeHtml(task.id)}">
                 <div class="scheduled-task-info">
-                    <span class="scheduled-task-time">${task.time}</span>
-                    <span class="scheduled-task-preview">${escapeHtml(task.message.substring(0, 30))}${task.message.length > 30 ? '...' : ''}</span>
+                    <span class="scheduled-task-time">${escapeHtml(_formatExpression(task))}</span>
+                    <span class="scheduled-task-preview">${escapeHtml((task.message || '').substring(0, 40))}${(task.message || '').length > 40 ? '...' : ''}</span>
                 </div>
-                ${task.repeat ? '<span class="scheduled-task-badge">Daily</span>' : '<span class="scheduled-task-badge">Once</span>'}
+                <span class="scheduled-task-badge">${task.schedule_type || 'unknown'}</span>
                 <div class="scheduled-task-actions">
-                    <button class="scheduled-task-action-btn" onclick="window.editScheduledTask(${index})" title="Edit">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                        </svg>
-                    </button>
-                    <button class="scheduled-task-action-btn delete" onclick="window.deleteScheduledTask(${index})" title="Delete">
+                    <button class="scheduled-task-action-btn delete" onclick="window.deleteScheduledTask('${escapeHtml(task.id)}')" title="Delete">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <line x1="18" y1="6" x2="6" y2="18"></line>
                             <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -3520,50 +3696,26 @@
         `).join('');
     }
 
-    // Edit scheduled task
-    let editingScheduledTaskIndex = -1;
-
-    window.editScheduledTask = function(index) {
-        const tasks = loadScheduledTasks();
-        if (index < 0 || index >= tasks.length) return;
-
-        const task = tasks[index];
-        editingScheduledTaskIndex = index;
-
-        // Open modal with existing data
-        const modal = document.getElementById('scheduledTaskModal');
-        const timeInput = document.getElementById('scheduledTaskTime');
-        const messageInput = document.getElementById('scheduledTaskMessage');
-        const repeatInput = document.getElementById('scheduledTaskRepeat');
-
-        if (timeInput) timeInput.value = task.time;
-        if (messageInput) messageInput.value = task.message;
-        if (repeatInput) repeatInput.checked = task.repeat || false;
-
-        // Update modal title
-        const modalTitle = modal?.querySelector('.modal-header h3');
-        if (modalTitle) modalTitle.textContent = 'Edit Scheduled Task';
-
-        modal?.classList.add('active');
+    window.deleteScheduledTask = async function(scheduleId) {
+        try {
+            await fetch(`/api/scheduled-tasks/${encodeURIComponent(scheduleId)}`, { method: 'DELETE' });
+            showToast('Deleted', 'Scheduled task removed', 'info', 2000);
+            const tasks = await fetchScheduledTasks();
+            renderScheduledTasks(tasks);
+        } catch (e) {
+            showToast('Error', 'Failed to delete task', 'error');
+        }
     };
 
     function initScheduledTasks() {
-        // Load enabled state
-        scheduledTasksEnabled = localStorage.getItem(SCHEDULED_TASKS_ENABLED_KEY) === 'true';
-
+        // Hide the enabled toggle — server-side scheduler is always active
         const enabledToggle = document.getElementById('scheduledTasksEnabled');
         if (enabledToggle) {
-            enabledToggle.checked = scheduledTasksEnabled;
-            enabledToggle.addEventListener('change', () => {
-                scheduledTasksEnabled = enabledToggle.checked;
-                localStorage.setItem(SCHEDULED_TASKS_ENABLED_KEY, scheduledTasksEnabled);
-                scheduleAllTasks();
-                showToast('Scheduled Tasks', scheduledTasksEnabled ? 'Enabled' : 'Disabled', 'info', 2000);
-            });
+            enabledToggle.closest('.drawer-setting-row')?.remove();
         }
 
-        renderScheduledTasks();
-        scheduleAllTasks();
+        // Load tasks from server
+        fetchScheduledTasks().then(tasks => renderScheduledTasks(tasks));
 
         const addBtn = document.getElementById('addScheduledTaskBtn');
         const modal = document.getElementById('scheduledTaskModal');
@@ -3572,11 +3724,8 @@
         const saveBtn = document.getElementById('saveScheduledTaskBtn');
 
         addBtn?.addEventListener('click', () => {
-            editingScheduledTaskIndex = -1; // Reset editing index
-            // Update modal title
             const modalTitle = modal?.querySelector('.modal-header h3');
             if (modalTitle) modalTitle.textContent = 'Add Scheduled Task';
-
             modal?.classList.add('active');
             document.getElementById('scheduledTaskTime').value = '';
             document.getElementById('scheduledTaskMessage').value = '';
@@ -3590,7 +3739,7 @@
         saveBtn?.addEventListener('click', saveNewScheduledTask);
     }
 
-    function saveNewScheduledTask() {
+    async function saveNewScheduledTask() {
         const timeInput = document.getElementById('scheduledTaskTime');
         const messageInput = document.getElementById('scheduledTaskMessage');
         const repeatInput = document.getElementById('scheduledTaskRepeat');
@@ -3601,116 +3750,44 @@
 
         if (!time) {
             showToast('Error', 'Please select a time', 'error');
-            timeInput?.classList.add('error');
             return;
         }
-        timeInput?.classList.remove('error');
-
         if (!message) {
             showToast('Error', 'Please enter a message', 'error');
-            messageInput?.classList.add('error');
             return;
         }
-        messageInput?.classList.remove('error');
 
-        const tasks = loadScheduledTasks();
+        // Convert HH:MM + repeat into a cron/interval expression
+        const [hours, minutes] = time.split(':');
+        const expression = repeat
+            ? `${parseInt(minutes)} ${parseInt(hours)} * * *`   // cron: daily at HH:MM
+            : `${parseInt(minutes)} ${parseInt(hours)} * * *`;  // same cron, one-shot handled by removing after fire
 
-        if (editingScheduledTaskIndex >= 0 && editingScheduledTaskIndex < tasks.length) {
-            // Update existing task
-            tasks[editingScheduledTaskIndex] = {
-                ...tasks[editingScheduledTaskIndex],
-                time: time,
-                message: message,
-                repeat: repeat
-            };
-            showToast('Scheduled Task', `Task updated for ${time}`, 'success', 2000);
-        } else {
-            // Create new task
-            tasks.push({
-                id: Date.now().toString(),
-                time: time,
-                message: message,
-                repeat: repeat,
-                enabled: true
+        const scheduleId = `web-${Date.now()}`;
+
+        try {
+            const resp = await fetch('/api/scheduled-tasks', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    schedule_id: scheduleId,
+                    expression: expression,
+                    message: message,
+                    instance_id: currentInstance,
+                }),
             });
+            if (!resp.ok) {
+                const err = await resp.json();
+                showToast('Error', err.detail || 'Failed to create task', 'error');
+                return;
+            }
             showToast('Scheduled Task', `Task scheduled for ${time}`, 'success', 2000);
+            const tasks = await fetchScheduledTasks();
+            renderScheduledTasks(tasks);
+            document.getElementById('scheduledTaskModal')?.classList.remove('active');
+        } catch (e) {
+            showToast('Error', 'Failed to create task', 'error');
         }
-
-        saveScheduledTasks(tasks);
-        renderScheduledTasks();
-        scheduleAllTasks();
-
-        editingScheduledTaskIndex = -1; // Reset editing index
-        document.getElementById('scheduledTaskModal')?.classList.remove('active');
-    }
-
-    window.deleteScheduledTask = function(index) {
-        const tasks = loadScheduledTasks();
-        if (index >= 0 && index < tasks.length) {
-            tasks.splice(index, 1);
-            saveScheduledTasks(tasks);
-            renderScheduledTasks();
-            scheduleAllTasks();
-            showToast('Deleted', 'Scheduled task removed', 'info', 2000);
-        }
-    };
-
-    function scheduleAllTasks() {
-        // Clear existing timers
-        scheduledTaskTimers.forEach(timer => clearTimeout(timer));
-        scheduledTaskTimers = [];
-
-        // Check global toggle
-        if (!scheduledTasksEnabled) {
-            console.log('[Scheduled] Scheduled tasks disabled');
-            return;
-        }
-
-        const tasks = loadScheduledTasks();
-
-        tasks.forEach((task, index) => {
-            if (!task.enabled) return;
-
-            const scheduleTask = () => {
-                const now = new Date();
-                const [hours, minutes] = task.time.split(':').map(Number);
-                const targetTime = new Date();
-                targetTime.setHours(hours, minutes, 0, 0);
-
-                // If time has passed today, schedule for tomorrow
-                if (targetTime <= now) {
-                    targetTime.setDate(targetTime.getDate() + 1);
-                }
-
-                const delay = targetTime.getTime() - now.getTime();
-
-                const timer = setTimeout(() => {
-                    if (state.ws && state.ws.readyState === WebSocket.OPEN && !state.isLoading) {
-                        console.log(`[Scheduled] Executing task at ${task.time}`);
-                        sendMessage(task.message);
-                    }
-
-                    if (task.repeat) {
-                        // Reschedule for next day
-                        scheduleTask();
-                    } else {
-                        // Remove one-time task after execution
-                        const currentTasks = loadScheduledTasks();
-                        const taskIndex = currentTasks.findIndex(t => t.id === task.id);
-                        if (taskIndex >= 0) {
-                            currentTasks.splice(taskIndex, 1);
-                            saveScheduledTasks(currentTasks);
-                            renderScheduledTasks();
-                        }
-                    }
-                }, delay);
-
-                scheduledTaskTimers.push(timer);
-                console.log(`[Scheduled] Task scheduled for ${task.time} (in ${Math.round(delay / 60000)} minutes)`);
-            };
-
-            scheduleTask();
-        });
     }
 
     // Initialize drawer event listeners
@@ -3964,6 +4041,8 @@
 
         // Context indicator
         initContextIndicator();
+        initMcpPanel();
+        initPermissionToggle();
 
         // Observe for new messages to enhance code blocks
         const observer = new MutationObserver((mutations) => {

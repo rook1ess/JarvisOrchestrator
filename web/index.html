@@ -106,18 +106,32 @@
                             </div>
                             <div class="context-stats" id="contextStats">
                                 <div class="context-stat-row">
-                                    <span>Input</span><span id="ctxInput">--</span>
+                                    <span>Total</span><span id="ctxTotal">--</span>
                                 </div>
                                 <div class="context-stat-row">
-                                    <span>Output</span><span id="ctxOutput">--</span>
-                                </div>
-                                <div class="context-stat-row">
-                                    <span>Cache Read</span><span id="ctxCache">--</span>
+                                    <span>Max</span><span id="ctxMax">--</span>
                                 </div>
                             </div>
+                            <div class="context-categories" id="contextCategories"></div>
                             <button class="context-compact-btn" id="contextCompactBtn">Compact Context</button>
                         </div>
                     </div>
+                    <!-- MCP Status -->
+                    <button class="header-action-btn" id="mcpBtn" title="MCP Servers">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+                            <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+                            <line x1="6" y1="6" x2="6.01" y2="6"/>
+                            <line x1="6" y1="18" x2="6.01" y2="18"/>
+                        </svg>
+                    </button>
+                    <!-- Permission Mode Toggle -->
+                    <button class="header-action-btn" id="permissionBtn" title="Permission mode">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                        </svg>
+                    </button>
                 </div>
                 <div class="role-indicator" id="roleIndicator">
                     <span class="role-status" id="roleStatus">

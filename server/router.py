@@ -86,7 +86,8 @@ class MessageRouter:
 
     async def route_message(self, channel: Channel, channel_type: str,
                              message: str, context: dict = None,
-                             attachments: list = None):
+                             attachments: list = None,
+                             message_id: str = None):
         """路由消息到正确的 AgentInstance（不存在则自动创建）"""
         route = self.resolve(channel_type, context)
         if not route:
@@ -104,4 +105,5 @@ class MessageRouter:
             source=source,
             attachments=attachments,
             response_callback=channel.send_response,
+            message_id=message_id,
         )
