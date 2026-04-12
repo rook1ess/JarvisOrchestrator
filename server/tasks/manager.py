@@ -241,10 +241,10 @@ class TaskManager:
                 for task in expired:
                     task_id = task["task_id"]
                     task["status"] = "timeout"
-                    self._archive(task)
-                    del self.tasks[task_id]  # 从活跃列表移除
+                    # 不从活跃列表移除，保持和 tmux 生命周期一致
+                    # 中控收到通知后决定 renew 或 complete
                     self._save()
-                    print(f"[TaskManager] 任务超时并移除: {task_id}")
+                    print(f"[TaskManager] 任务超时: {task_id}")
                     await self._broadcast_task_update(task, "timeout")
                     await on_timeout_callback(task_id, task["description"], task.get("instance_id"))
 

@@ -337,15 +337,19 @@ async def jarvis_spawn_task(
     use_container: bool = True,
     instance_id: str = None,
 ) -> dict:
-    """一键派生 Claude Code 子实例执行任务。
-    自动完成全部流程：创建 tmux session → 启动 Claude → 等待就绪 → 发送任务 → 注册超时监控。
+    """一键派生 Claude Code 子进程执行任务。
+    自动完成：创建 tmux → 启动 Claude → 等待就绪 → 发送任务 → 注册超时监控。
+
+    任务生命周期：spawn_task → [renew_task] → complete_task。
+    长任务使用同一个 task_id，通过 renew_task 延长时间，不要按轮次命名（如 task-r1, task-r2），
+    直接用任务名（如 poker-dev）。超时后任务不会被删除，等待 renew 或 complete。
 
     Args:
-        task_id: 任务唯一标识，也用作 tmux session 名
-        prompt: 发送给子 Claude 的完整任务描述（prompt 内容）
-        description: 任务简短描述（用于前端展示），不传则自动截取 prompt 前 100 字符
-        working_dir: 宿主机上的工作目录绝对路径
-        timeout_minutes: 超时分钟数，到期后服务器会自动提醒检查
+        task_id: (必填) 任务唯一标识，也用作 tmux session 名
+        prompt: (必填) 发送给子 Claude 的完整任务描述
+        description: 任务简短描述（前端展示用），不传则截取 prompt 前 100 字符
+        working_dir: 宿主机工作目录绝对路径
+        timeout_minutes: 超时分钟数，到期后通知中控检查
         use_container: True 用 Docker 容器模式（推荐），False 用本地模式
         instance_id: 发起任务的实例 ID，用于超时通知路由
     """
@@ -582,16 +586,16 @@ async def jarvis_list_tasks() -> dict:
 # ============== 任务完成 ==============
 
 @mcp.tool()
-async def jarvis_complete_task(task_id: str, kill_tmux: bool = False) -> dict:
-    """标记任务为已完成并归档，从活跃任务列表中移除。
+async def jarvis_complete_task(task_id: str, kill_tmux: bool = True) -> dict:
+    """结束任务生命周期：归档任务并终止子进程。
 
-    注意 kill_tmux 的使用场景：
-    - 多阶段任务（如迭代开发）：保持 kill_tmux=False，子进程保留上下文用于后续轮次
-    - 多阶段任务的最后一轮（确保子进程完全完成生命周期后）或单次调用任务：设 kill_tmux=True 释放资源
+    确保当前子进程任务完全完成，多轮开发应确认子进程完成最后一轮开发。
+    调用后会清理任务，并 kill 子进程。注意，这会导致子进程上下文完全丢失，
+    请确认开发已经完全完成后，再调用此工具。
 
     Args:
         task_id: 任务 ID
-        kill_tmux: 是否同时终止 tmux session，默认 False（保留子进程）
+        kill_tmux: 是否终止 tmux session，默认 True
     """
     if not _task_manager:
         return {"status": "error", "message": "TaskManager not available"}
@@ -616,6 +620,25 @@ async def jarvis_complete_task(task_id: str, kill_tmux: bool = False) -> dict:
         "task_completed": True,
         "tmux_killed": tmux_killed,
     }
+
+
+@mcp.tool()
+async def jarvis_renew_task(task_id: str, extra_minutes: int = 20) -> dict:
+    """延长子进程的工作时间。
+
+    当子进程超时但仍在正常工作时使用。调用前建议先通过 jarvis_check_output
+    确认子进程仍在活跃工作。
+
+    Args:
+        task_id: 任务 ID
+        extra_minutes: 延长的分钟数
+    """
+    if not _task_manager:
+        return {"status": "error", "message": "TaskManager not available"}
+    task_info = await _task_manager.renew_async(task_id, extra_minutes)
+    if not task_info:
+        return {"status": "error", "message": f"Task '{task_id}' not found"}
+    return {"status": "ok", "task_id": task_id, "extra_minutes": extra_minutes, "new_expires_at": task_info.get("expires_at")}
 
 
 # ============== 定时任务 ==============

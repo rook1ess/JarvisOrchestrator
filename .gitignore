@@ -40,3 +40,7 @@ sessions.json
 
 # Personal content
 novels/
+
+# Claude project docs
+CLAUDE.md
+CLAUDE-*.md
