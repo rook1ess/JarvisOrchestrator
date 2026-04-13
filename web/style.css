@@ -3895,3 +3895,78 @@ body::after {
     font-family: 'SF Mono', 'Fira Code', monospace;
     opacity: 0.7;
 }
+
+/* Hook Callback Card */
+.hook-callback-card {
+    margin: 8px 60px 8px 52px;
+    padding: 10px 14px;
+    border-radius: var(--radius-md, 8px);
+    border-left: 3px solid;
+    font-size: 13px;
+    line-height: 1.5;
+}
+.hook-callback-card.normal {
+    background: var(--bg-secondary);
+    border-left-color: #5a9e6f;
+}
+.hook-callback-card.failure {
+    background: #fdf6f0;
+    border-left-color: #d4880f;
+}
+.hook-callback-card.timeout {
+    background: #fdf6f0;
+    border-left-color: #c4651a;
+}
+[data-theme="dark"] .hook-callback-card.failure,
+[data-theme="dark"] .hook-callback-card.timeout {
+    background: rgba(212, 136, 15, 0.08);
+}
+.hook-callback-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.hook-task-id {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.hook-divider {
+    color: var(--text-muted);
+    opacity: 0.5;
+}
+.hook-count {
+    color: var(--text-secondary);
+    font-family: var(--font-mono, monospace);
+    font-size: 12px;
+}
+.hook-status {
+    color: var(--text-secondary);
+}
+.hook-callback-card.failure .hook-status,
+.hook-callback-card.timeout .hook-status {
+    color: #b36b00;
+}
+.hook-response-details {
+    margin-top: 8px;
+}
+.hook-response-details summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 12px;
+    user-select: none;
+}
+.hook-response-details summary:hover {
+    color: var(--text-secondary);
+}
+.hook-response-content {
+    margin-top: 6px;
+    padding: 8px 10px;
+    background: var(--bg-primary);
+    border-radius: var(--radius-sm, 4px);
+    font-size: 12px;
+    line-height: 1.5;
+    max-height: 300px;
+    overflow-y: auto;
+    color: var(--text-secondary);
+}

@@ -78,40 +78,17 @@ async def restart_server():
     return {"status": "ok", "message": "Server restarting..."}
 
 
-@router.post("/callback")
-async def task_callback(data: CallbackData):
-    """接收子进程回调，更新 TaskManager 状态并通知父实例"""
-    print(f"[Callback] 收到子进程汇报: task={data.task_id}, status={data.status}, instance={data.instance_id or 'all'}")
-
-    if data.status == "progress":
-        # 仅更新进度，不需要通知父实例
-        if _task_manager:
-            await _task_manager.update_progress_async(data.task_id, data.progress, data.current_step)
-        return {"status": "ok", "message": f"Progress updated for task {data.task_id}"}
-
-    if data.status == "done":
-        # 子进程报告完成当前阶段 → 续期任务（保持活跃），等待父实例决策
-        if _task_manager:
-            await _task_manager.renew_async(data.task_id)
-        message = f"[子进程汇报] 任务 {data.task_id} 报告已完成当前阶段任务。请确认当前所处步骤/剩余步骤，并下发下一阶段任务。若已经完成所有步骤，使用 jarvis_complete_task 将任务标记为完成。"
-    elif data.status == "blocked":
-        # 子进程报告阻塞 → 标记任务为 blocked
-        if _task_manager:
-            await _task_manager.block_async(data.task_id, data.reason or "")
-        message = f"[子进程汇报] 任务 {data.task_id} 报告遇到阻塞: {data.reason}。请核实并决定下一步。"
-    else:
-        return {"status": "ok", "message": f"Callback received for task {data.task_id}"}
-
-    # 确定通知哪些实例
-    if data.instance_id:
-        targets = [_agent_manager.get_instance(data.instance_id)] if _agent_manager else []
+async def _notify_instance(instance_id: str, message: str, source: str = "callback") -> int:
+    """查找目标实例并投递消息，返回通知的实例数"""
+    if instance_id:
+        targets = [_agent_manager.get_instance(instance_id)] if _agent_manager else []
         targets = [t for t in targets if t is not None]
     else:
         targets = list(_agent_manager.get_all_instances().values()) if _agent_manager else []
 
     if not targets:
-        print(f"[Callback] 无活跃实例可接收回调")
-        return {"status": "ok", "message": "No active instance to notify"}
+        print(f"[{source}] 无活跃实例可接收回调")
+        return 0
 
     for inst in targets:
         channel_type = _message_router.get_channel_type_for_instance(inst.instance_id) if _message_router else "websocket"
@@ -119,9 +96,82 @@ async def task_callback(data: CallbackData):
             callback = _qq_channel.send_response
         else:
             callback = _ws_channel.send_response if _ws_channel else None
-        await inst.enqueue(message, source="callback", response_callback=callback)
+        await inst.enqueue(message, source=source, response_callback=callback)
 
-    return {"status": "ok", "message": f"Callback delivered to {len(targets)} instance(s)"}
+    return len(targets)
+
+
+@router.post("/callback")
+async def task_callback(data: CallbackData):
+    """接收子进程回调（旧版 curl 方式，保留兼容）"""
+    print(f"[Callback] 收到子进程汇报: task={data.task_id}, status={data.status}, instance={data.instance_id or 'all'}")
+
+    if data.status == "progress":
+        if _task_manager:
+            await _task_manager.update_progress_async(data.task_id, data.progress, data.current_step)
+        return {"status": "ok", "message": f"Progress updated for task {data.task_id}"}
+
+    if data.status == "done":
+        if _task_manager:
+            await _task_manager.renew_async(data.task_id)
+        message = f"[子进程汇报] 任务 {data.task_id} 报告已完成当前阶段任务。请确认当前所处步骤/剩余步骤，并下发下一阶段任务。若已经完成所有步骤，使用 jarvis_complete_task 将任务标记为完成。"
+    elif data.status == "blocked":
+        if _task_manager:
+            await _task_manager.block_async(data.task_id, data.reason or "")
+        message = f"[子进程汇报] 任务 {data.task_id} 报告遇到阻塞: {data.reason}。请核实并决定下一步。"
+    else:
+        return {"status": "ok", "message": f"Callback received for task {data.task_id}"}
+
+    count = await _notify_instance(data.instance_id, message)
+    return {"status": "ok", "message": f"Callback delivered to {count} instance(s)"}
+
+
+@router.post("/hook/stop")
+async def hook_stop(request: Request, task_id: str = Query(...), instance_id: str = Query("")):
+    """接收 Claude Code Stop hook 回调 — 子进程每轮完成时自动触发"""
+    body = await request.json()
+    stop_reason = body.get("stop_reason", "unknown")
+    last_message = body.get("last_assistant_message", "")
+
+    print(f"[Hook/Stop] task={task_id}, reason={stop_reason}, msg_len={len(last_message)}")
+
+    # 保活 5 分钟缓冲，等待中控决策
+    if _task_manager:
+        await _task_manager.renew_async(task_id, extra_minutes=5)
+
+    # 截取最后 1000 字符
+    truncated = last_message[-1000:] if len(last_message) > 1000 else last_message
+
+    message = (
+        f"[子进程回调] 任务 {task_id} 完成了一轮工作（{stop_reason}，已自动保活 5 分钟）。\n\n"
+        f"<subprocess_response>\n{truncated}\n</subprocess_response>\n\n"
+        f"请根据回复内容决定下一步：\n"
+        f"- 继续派发：jarvis_send_input + jarvis_renew_task\n"
+        f"- 全部完成：jarvis_complete_task\n"
+        f"- 需要详情：jarvis_check_output"
+    )
+
+    count = await _notify_instance(instance_id, message, source="hook/stop")
+    return {"status": "ok", "message": f"Stop hook delivered to {count} instance(s)"}
+
+
+@router.post("/hook/stop-failure")
+async def hook_stop_failure(request: Request, task_id: str = Query(...), instance_id: str = Query("")):
+    """接收 Claude Code StopFailure hook 回调 — 子进程遇到 API 错误时触发"""
+    body = await request.json()
+    error_type = body.get("error_type", "unknown")
+    error_message = body.get("error_message", "")
+
+    print(f"[Hook/StopFailure] task={task_id}, type={error_type}, msg={error_message[:200]}")
+
+    message = (
+        f"[子进程异常] 任务 {task_id} 发生错误：{error_type} - {error_message}\n\n"
+        f"请 jarvis_check_output 查看子进程状态，尝试为子进程提供帮助。"
+        f"如果遇到认证等无法解决的问题，jarvis_kill_task 终止子进程并通知用户。"
+    )
+
+    count = await _notify_instance(instance_id, message, source="hook/stop-failure")
+    return {"status": "ok", "message": f"StopFailure hook delivered to {count} instance(s)"}
 
 
 @router.post("/qq/webhook")

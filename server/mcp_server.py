@@ -327,6 +327,55 @@ def _wait_for_ready(task_id: str, timeout: int = 30, poll_interval: float = 2.0)
     return {"ready": False, "output": output, "auto_answered": auto_answered}
 
 
+def _build_hooks_config(callback_host: str) -> dict:
+    """构建 Stop/StopFailure command hook 配置（command 类型绕过 http hook 的私有 IP 限制）"""
+    stop_url = f"http://{callback_host}:{SERVER_PORT}/hook/stop?task_id=$TASK_ID&instance_id=$INSTANCE_ID"
+    fail_url = f"http://{callback_host}:{SERVER_PORT}/hook/stop-failure?task_id=$TASK_ID&instance_id=$INSTANCE_ID"
+    env_vars = ["TASK_ID", "INSTANCE_ID"]
+    return {
+        "Stop": [{"hooks": [{"type": "command", "command": f'curl -s -X POST "{stop_url}" -H "Content-Type: application/json" -d @-', "timeout": 10, "allowedEnvVars": env_vars}]}],
+        "StopFailure": [{"hooks": [{"type": "command", "command": f'curl -s -X POST "{fail_url}" -H "Content-Type: application/json" -d @-', "timeout": 10, "allowedEnvVars": env_vars}]}],
+    }
+
+
+def _ensure_container_hooks():
+    """确保容器内 ~/.claude/settings.json 包含 hook 配置"""
+    # 读取现有配置
+    result = subprocess.run(
+        ["docker", "exec", CONTAINER_NAME, "cat", "/home/claude/.claude/settings.json"],
+        capture_output=True, text=True,
+    )
+    try:
+        settings = json.loads(result.stdout) if result.returncode == 0 else {}
+    except json.JSONDecodeError:
+        settings = {}
+
+    # 合并 hooks
+    settings["hooks"] = _build_hooks_config("host.docker.internal")
+
+    # 写回
+    subprocess.run(
+        ["docker", "exec", "-i", CONTAINER_NAME, "bash", "-c", "cat > /home/claude/.claude/settings.json"],
+        input=json.dumps(settings, indent=2), capture_output=True, text=True,
+    )
+
+
+def _ensure_local_hooks(working_dir: str):
+    """确保本地 working_dir/.claude/settings.local.json 包含 hook 配置"""
+    from pathlib import Path
+    claude_dir = Path(working_dir) / ".claude"
+    claude_dir.mkdir(exist_ok=True)
+    settings_path = claude_dir / "settings.local.json"
+
+    try:
+        settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+    except json.JSONDecodeError:
+        settings = {}
+
+    settings["hooks"] = _build_hooks_config("localhost")
+    settings_path.write_text(json.dumps(settings, indent=2))
+
+
 @mcp.tool()
 async def jarvis_spawn_task(
     task_id: str,
@@ -364,6 +413,8 @@ async def jarvis_spawn_task(
         if check.returncode == 0:
             return {"status": "error", "message": f"tmux session '{task_id}' already exists"}
 
+        inst_id = instance_id or ""
+
         if use_container:
             # 确保容器运行
             subprocess.run(["docker", "start", CONTAINER_NAME], capture_output=True)
@@ -395,47 +446,43 @@ async def jarvis_spawn_task(
                 input=onboarding, capture_output=True, text=True,
             )
 
-            cmd = f'docker exec -it -e CLAUDE_CODE_OAUTH_TOKEN="{token}" {CONTAINER_NAME} bash -c "cd {container_dir} && claude --dangerously-skip-permissions"'
+            # 写入 Stop/StopFailure hook 配置到容器 settings.json（合并现有配置）
+            _ensure_container_hooks()
+
+            cmd = (
+                f'docker exec -it'
+                f' -e CLAUDE_CODE_OAUTH_TOKEN="{token}"'
+                f' -e TASK_ID="{task_id}"'
+                f' -e INSTANCE_ID="{inst_id}"'
+                f' {CONTAINER_NAME} bash -c "cd {container_dir} && claude --dangerously-skip-permissions"'
+            )
             subprocess.run(["tmux", "send-keys", "-t", task_id, cmd, "Enter"])
 
             readiness = _wait_for_ready(task_id, timeout=30)
             if not readiness["ready"]:
                 return {"status": "error", "message": f"Claude did not become ready within 30s. Output: {readiness['output'][-300:]}"}
-
-            callback_host = "host.docker.internal"
-            noproxy = "--noproxy '*'"
         else:
             # 本地模式
             subprocess.run([
                 "tmux", "new-session", "-d", "-s", task_id,
                 "-x", "200", "-y", "50", "-c", working_dir
             ])
+
+            # 写入项目级 hook 配置
+            _ensure_local_hooks(working_dir)
+
+            # 设置环境变量后启动 claude
+            subprocess.run(["tmux", "send-keys", "-t", task_id,
+                            f'export TASK_ID="{task_id}" INSTANCE_ID="{inst_id}"', "Enter"])
+            time.sleep(0.5)
             subprocess.run(["tmux", "send-keys", "-t", task_id, "claude --dangerously-skip-permissions", "Enter"])
 
             readiness = _wait_for_ready(task_id, timeout=20)
             if not readiness["ready"]:
                 return {"status": "error", "message": f"Claude did not become ready within 20s. Output: {readiness['output'][-300:]}"}
 
-            callback_host = "localhost"
-            noproxy = ""
-
-        # 2. 构建完整 prompt（含 callback 协议）
-        inst_id = instance_id or ""
-        noproxy_flag = f" {noproxy}" if noproxy else ""
-        callback_protocol = f"""
----
-<任务完成协议>
-完成后执行：
-curl{noproxy_flag} -X POST http://{callback_host}:{SERVER_PORT}/callback -H "Content-Type: application/json" -d '{{"task_id":"{task_id}","status":"done","instance_id":"{inst_id}"}}'
-
-遇到问题时执行：
-curl{noproxy_flag} -X POST http://{callback_host}:{SERVER_PORT}/callback -H "Content-Type: application/json" -d '{{"task_id":"{task_id}","status":"blocked","reason":"问题描述","instance_id":"{inst_id}"}}'
-注意：作为子进程，你的消息可能会进入服务器的消息队列，只需要发送 curl 命令即可，发送完立马停止，不要检查服务器端的响应情况。"""
-
-        full_prompt = prompt + callback_protocol
-
-        # 5. 发送任务 + 多次 Enter
-        _tmux_send(task_id, full_prompt, extra_enters=2)
+        # 2. 发送任务 + 多次 Enter
+        _tmux_send(task_id, prompt, extra_enters=2)
 
         # 6. 等待确认 Claude 开始处理
         time.sleep(5)

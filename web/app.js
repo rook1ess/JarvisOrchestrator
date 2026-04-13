@@ -1717,6 +1717,68 @@
         return messageEl;
     }
 
+    // 子进程回调计数器（按 task_id 累计）
+    const _hookCallbackCounts = {};
+
+    function createHookCallbackCard(source, content) {
+        const isFailure = source === 'hook/stop-failure';
+        const isTimeout = source === 'timeout';
+
+        // 解析 task_id 和详情
+        let taskId = '?', detail = '', responseText = '', cardType = 'normal';
+
+        if (isTimeout) {
+            // [任务超时] 任务 {task_id}（{description}）已到达超时时间。...
+            const m = content.match(/任务\s+(\S+)[（(]([^)）]*)[)）]/);
+            if (m) { taskId = m[1]; detail = m[2].trim(); }
+            cardType = 'timeout';
+        } else if (isFailure) {
+            // [子进程异常] 任务 {task_id} 发生错误：{error_type} - {error_message}
+            const m = content.match(/任务\s+(\S+)\s+发生错误[：:]\s*(.+?)(?:\n|$)/);
+            if (m) { taskId = m[1]; detail = m[2].trim(); }
+            cardType = 'failure';
+        } else {
+            // [子进程回调] 任务 {task_id} 完成了一轮工作（{stop_reason}，...）
+            const m = content.match(/任务\s+(\S+)\s+完成了一轮工作[（(]([^)）]+)[)）]/);
+            if (m) { taskId = m[1]; detail = m[2].split('，')[0].trim(); }
+            // 提取 <subprocess_response> 内容
+            const rsp = content.match(/<subprocess_response>\n?([\s\S]*?)\n?<\/subprocess_response>/);
+            if (rsp) { responseText = rsp[1].trim(); }
+        }
+
+        // 累计计数
+        _hookCallbackCounts[taskId] = (_hookCallbackCounts[taskId] || 0) + 1;
+        const count = _hookCallbackCounts[taskId];
+
+        const card = document.createElement('div');
+        card.className = `hook-callback-card ${cardType}`;
+
+        const statusIcon = isTimeout ? '⏱️' : (isFailure ? '⚠️' : '✅');
+        const statusText = isTimeout ? (detail || '超时') : detail;
+
+        let html = `
+            <div class="hook-callback-header">
+                <span class="hook-task-id">📋 ${escapeHtml(taskId)}</span>
+                <span class="hook-divider">·</span>
+                <span class="hook-count">汇报 #${count}</span>
+                <span class="hook-divider">·</span>
+                <span class="hook-status">${statusIcon} ${escapeHtml(statusText)}</span>
+            </div>
+        `;
+
+        if (responseText) {
+            html += `
+                <details class="hook-response-details">
+                    <summary>查看子进程回复</summary>
+                    <div class="hook-response-content">${renderMarkdown(responseText)}</div>
+                </details>
+            `;
+        }
+
+        card.innerHTML = html;
+        return card;
+    }
+
     function createStreamingMessage() {
         const messageEl = createMessageElement('assistant', '', true);
         const contentEl = messageEl.querySelector('.message-content');
@@ -1849,7 +1911,14 @@
                         elements.welcomeMessage.classList.add('hidden');
                     }
                     // 显示系统通知
-                    addMessage('user', `[${data.source || 'system'}] ${data.content}`);
+                    if (data.source === 'hook/stop' || data.source === 'hook/stop-failure' || data.source === 'timeout') {
+                        // 子进程回调/超时 → 渲染为紧凑卡片
+                        const card = createHookCallbackCard(data.source, data.content);
+                        elements.messagesWrapper.appendChild(card);
+                        scrollToBottom();
+                    } else {
+                        addMessage('user', `[${data.source || 'system'}] ${data.content}`);
+                    }
                     // 创建流式消息容器，准备接收 Claude 的回复
                     const { messageEl, contentEl, toolsContainer, textContainer } = createStreamingMessage();
                     state.currentMessageEl = messageEl;

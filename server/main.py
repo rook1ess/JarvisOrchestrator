@@ -31,7 +31,7 @@ message_router = MessageRouter(agent_manager)
 
 async def _handle_timeout(task_id: str, description: str, instance_id: str = None):
     """处理任务超时，通知发起任务的实例或所有活跃实例"""
-    message = f"[系统通知] 任务 {task_id} ({description}) 到达超时时间，请确认任务是否在正常进行。若原因是子进程没有正确发送回调，请手动注册/延长任务时间，每隔 15 分钟监督进度，并下发下一步任务，直到达到目标步骤。"
+    message = f"[任务超时] 任务 {task_id}（{description}）已到达超时时间。请 jarvis_check_output 检查子进程状态，如果仍在正常运行，jarvis_renew_task 续期即可。"
 
     if instance_id:
         targets = [agent_manager.get_instance(instance_id)]

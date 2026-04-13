@@ -24,8 +24,8 @@ data/
 *.log
 /tmp/
 
-# Local config (keep templates)
-.claude/settings.local.json
+# Claude Code local config
+.claude/
 
 # Docker volumes
 napcat/

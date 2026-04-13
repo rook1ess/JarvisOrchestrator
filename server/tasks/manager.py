@@ -257,7 +257,7 @@ class TaskManager:
 
     def _cleanup_zombies(self):
         """清理 status 不是 running/blocked 的僵尸任务（历史 bug 残留）"""
-        zombies = [tid for tid, t in self.tasks.items() if t["status"] not in ("running", "blocked")]
+        zombies = [tid for tid, t in self.tasks.items() if t["status"] not in ("running", "blocked", "timeout")]
         for tid in zombies:
             self._archive(self.tasks.pop(tid))
             print(f"[TaskManager] 清理僵尸任务: {tid}")
