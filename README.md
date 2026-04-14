@@ -33,3 +33,5 @@
 ## 截图
 
 ![Jarvis Orchestrator - 三路并发任务](docs/screenshot.png)
+
+![Jarvis Orchestrator - 验收报告](docs/screenshot-2.png)
