@@ -7,7 +7,7 @@
 ## 概览
 
 - 中控通过 Web UI 或 QQ Bot 接收指令
-- 将任务派发到 Docker 容器内的多个 Claude Code 子进程，通过 tmux 会话隔离管理
+- 通过标准化 MCP 工具调用管理子进程全生命周期，任务派发到 Docker 容器内的多个 Claude Code 子进程，通过 tmux 会话隔离管理
 - 子进程通过 Claude Code 原生 Stop Hook 自动回调中控
 - 支持 3-5 个子进程并发独立工作
 - 24+ 个自定义 MCP 工具，覆盖子进程生命周期、浏览器自动化、实例间通信、定时任务等
