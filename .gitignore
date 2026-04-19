@@ -24,8 +24,9 @@ data/
 *.log
 /tmp/
 
-# Claude Code local config
+# AI config
 .claude/
+.gemini/
 
 # Docker volumes
 napcat/
