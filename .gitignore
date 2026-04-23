@@ -45,3 +45,6 @@ novels/
 # Claude project docs
 CLAUDE.md
 CLAUDE-*.md
+
+# graphify skill output
+graphify-out/

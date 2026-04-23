@@ -9,13 +9,16 @@ from fastapi.staticfiles import StaticFiles
 from server.config import WEB_DIR, SERVER_SESSION_ID
 from server.tasks.manager import TaskManager
 from server.tasks.scheduler import ScheduledTaskManager
+from server.tasks import daily_digest
 from server.agents.manager import AgentManager
 from server.channels.websocket import WebSocketChannel
 from server.channels.qq import QQChannel
 from server.router import MessageRouter
 
-from server.api import pages, sessions, tasks, status, instances
+from server.api import pages, sessions, tasks, status, instances, config as config_api, subprocess_info
 from server.mcp_server import mcp as mcp_server, init as mcp_init, shutdown as mcp_shutdown
+from server.plugins import load_plugins, shutdown_plugins
+from server.config_store import get_config
 
 # 预先创建 MCP streamable HTTP app（触发 session_manager 的 lazy init）
 _mcp_app = mcp_server.streamable_http_app()
@@ -85,13 +88,26 @@ async def lifespan(app: FastAPI):
     await task_manager.start_checker(_handle_timeout)
     await scheduler.start(_fire_scheduled)
     await agent_manager.start_health_checker(interval=30, idle_timeout_minutes=message_router.idle_timeout_minutes)
+    await daily_digest.start()
+
+    # 加载启用的 plugin（根据 data/config.json 的 plugins.* 开关）
+    config = get_config()
+    plugin_context = {
+        "agent_manager": agent_manager,
+        "task_manager": task_manager,
+        "scheduler": scheduler,
+    }
+    loaded_plugins = load_plugins(mcp_server, config, plugin_context)
+    app.state.loaded_plugins = loaded_plugins
 
     # 启动 MCP Server 的 session manager（StreamableHTTP 需要 task group 初始化）
     async with mcp_server.session_manager.run():
         yield
 
     # 关闭
+    await shutdown_plugins(app.state.loaded_plugins)
     await mcp_shutdown()
+    await daily_digest.stop()
     await scheduler.stop()
     await agent_manager.stop_health_checker()
     await task_manager.stop_checker()
@@ -113,6 +129,8 @@ app.include_router(sessions.router)
 app.include_router(tasks.router)
 app.include_router(status.router)
 app.include_router(instances.router)
+app.include_router(config_api.router)
+app.include_router(subprocess_info.router)
 
 # 挂载 MCP Server 到 /mcp
 # MCP Server 挂载（FastMCP 内部路由是 /mcp，mount 后完整路径 /mcp/mcp）

@@ -1,0 +1,15 @@
+{
+    "name": "knowledge",
+    "version": "0.1.0",
+    "description": "Hybrid (sqlite-vec + FTS5) vector knowledge base. Indexes user knowledge files + memory_detail + projects_detail.",
+    "enabled_by_default": false,
+    "provides_tools": [
+        "jarvis_memory_search",
+        "jarvis_knowledge_reindex",
+        "jarvis_knowledge_stats"
+    ],
+    "requires_python_packages": [
+        "sqlite-vec",
+        "llama-cpp-python"
+    ]
+}
