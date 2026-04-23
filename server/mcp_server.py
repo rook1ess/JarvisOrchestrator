@@ -9,7 +9,7 @@ import time
 
 from mcp.server.fastmcp import FastMCP
 
-from server.config import SERVER_PORT
+from server.config import SERVER_PORT, DATA_DIR
 from server.browser import BrowserManager
 
 mcp = FastMCP("jarvis", stateless_http=True)
@@ -661,11 +661,175 @@ async def jarvis_complete_task(task_id: str, kill_tmux: bool = True) -> dict:
             return result.returncode == 0
         tmux_killed = await loop.run_in_executor(None, _kill)
 
+    registered_at = task_info.get("registered_at")
+    duration_minutes = None
+    if registered_at:
+        duration_minutes = round((time.time() - registered_at) / 60, 1)
+
     return {
         "status": "ok",
         "task_id": task_id,
         "task_completed": True,
         "tmux_killed": tmux_killed,
+        "description": task_info.get("description"),
+        "registered_at": registered_at,
+        "duration_minutes": duration_minutes,
+        "next_action": (
+            "任务已归档。请立即调用 write_jarvis_memory 写入**两份**项目归档：\n"
+            "1. category='projects'（简短版 ~50-100 tokens，进入 system_prompt 全量注入）\n"
+            "2. category='projects_detail'（细化版 ~300-500 tokens，含关键决策/技术权衡，供搜索）\n"
+            "两份条目都需包含：完成时间 · 项目题目 · 项目路径 · 迭代轮数 · 耗时。"
+        ),
+    }
+
+
+# ============== 记忆写入 ==============
+
+_MEMORY_DIR = DATA_DIR / "memory"
+_MEMORY_WRITABLE = ("memory", "preferences", "projects", "projects_detail", "credentials")
+
+
+@mcp.tool()
+async def write_jarvis_memory(
+    category: str,
+    content: str = None,
+    overwrite: bool = False,
+    old_string: str = None,
+    new_string: str = None,
+) -> dict:
+    """[CALL ONLY WHEN EXPLICITLY REQUESTED] Persist data to Jarvis memory/preferences/projects/credentials markdown. Do NOT call proactively. Use sparingly.
+
+    Call ONLY when the user explicitly says one of:
+    - "记住 xx" / "remember this" / "save my preference"
+    - "保存偏好" / "写入记忆" / "archive this project"
+
+    [FORBIDDEN]
+    - Proactive writing without a user request
+    - Dumping routine conversation content
+    - Writing what YOU think is important (judgment belongs to the user, not the AI)
+    - Replacing Edit / Write / TaskCreate purposes
+
+    Three modes (mutually exclusive):
+      1. APPEND   — default. Pass `content`. New content is appended to the file.
+      2. OVERWRITE — pass `content` + `overwrite=True`. Whole file replaced by `content`.
+      3. PATCH    — pass `old_string` + `new_string`. Replace exactly one occurrence of
+                    `old_string` with `new_string` (like the Edit tool). `old_string`
+                    must be unique in the file; otherwise the call fails.
+
+    [CRITICAL]
+    - Before any OVERWRITE call, you MUST first Read the full target md file and base the
+      new content on what is already there. Otherwise previously-written entries are lost.
+    - Before any PATCH call, you MUST first Read the file to pick a unique `old_string`.
+      If `old_string` matches 0 or ≥2 locations, the call fails — include more surrounding
+      context to disambiguate.
+
+    [SECURITY]
+    Content is scanned for prompt-injection threats before write (ignore-previous-instructions
+    phrases, invisible unicode, credential exfiltration patterns, wrapper tag escapes, etc.).
+    Rejected writes return error with reasons; resubmit with cleaned content.
+
+    Args:
+        category: Which memory file to write. One of:
+          - "memory"           — daily/weekly digests, auto-written by daily_digest. Rarely invoke.
+          - "preferences"      — user preferences. One bullet per line. Overwrite=True occasionally.
+          - "projects"         — short archive (~50-100 tokens per project, for system_prompt).
+              content MUST include: 完成时间 · 项目题目 · 项目路径 · 迭代轮数 · 耗时(可选) · 摘要
+          - "projects_detail"  — detailed archive (~300-500 tokens per project, for search).
+              content includes above + key decisions, technical trade-offs, lessons learned.
+              AFTER jarvis_complete_task, write BOTH projects and projects_detail.
+          - "credentials"      — passwords/API keys/SSH. One bullet per credential grouped by
+              ## service headings. Write/modify ONLY when user explicitly asks.
+        content: Markdown text (APPEND/OVERWRITE). Use Chinese for body.
+        overwrite: Default False (append). True = replace entire file.
+        old_string: Substring to replace (PATCH mode). Must be unique in file.
+        new_string: Replacement text (PATCH mode). Empty string deletes the match.
+    """
+    if category not in _MEMORY_WRITABLE:
+        return {
+            "status": "error",
+            "message": f"category must be one of {list(_MEMORY_WRITABLE)}; got '{category}'",
+        }
+
+    # Prompt injection 扫描（对所有 AI 写入内容）
+    from server.security import scan_for_threats
+    scan_text = ""
+    if content is not None:
+        scan_text = content
+    elif new_string is not None:
+        scan_text = new_string
+    if scan_text:
+        ok, reasons = scan_for_threats(scan_text, strict=True)
+        if not ok:
+            return {
+                "status": "error",
+                "message": "写入被拒绝 —— 内容命中安全扫描",
+                "reasons": reasons[:3],
+                "hint": "常见原因：内容含 'ignore previous instructions' 类指令劫持、"
+                        "不可见 unicode、凭据窃取命令、或闭合了包裹标签。请清理后重试。",
+            }
+
+    file_path = _MEMORY_DIR / f"{category}.md"
+    _MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+
+    # PATCH 模式
+    if old_string is not None or new_string is not None:
+        if old_string is None or new_string is None:
+            return {
+                "status": "error",
+                "message": "PATCH mode requires both old_string and new_string",
+            }
+        if content is not None or overwrite:
+            return {
+                "status": "error",
+                "message": "PATCH mode is mutually exclusive with content/overwrite",
+            }
+        if not file_path.exists():
+            return {
+                "status": "error",
+                "message": f"File {file_path} does not exist; cannot PATCH",
+            }
+
+        original = file_path.read_text(encoding="utf-8")
+        count = original.count(old_string)
+        if count == 0:
+            return {
+                "status": "error",
+                "message": "old_string not found in file; call Read first and copy verbatim",
+            }
+        if count > 1:
+            return {
+                "status": "error",
+                "message": f"old_string matches {count} locations; add more surrounding context to make it unique",
+            }
+
+        patched = original.replace(old_string, new_string, 1)
+        file_path.write_text(patched, encoding="utf-8")
+        return {
+            "status": "ok",
+            "category": category,
+            "file_path": str(file_path),
+            "mode": "patch",
+        }
+
+    # APPEND / OVERWRITE 模式
+    if content is None:
+        return {
+            "status": "error",
+            "message": "content is required for APPEND/OVERWRITE mode (or use old_string/new_string for PATCH)",
+        }
+
+    if overwrite:
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(content.rstrip() + "\n")
+    else:
+        with open(file_path, "a", encoding="utf-8") as f:
+            f.write("\n" + content.rstrip() + "\n")
+
+    return {
+        "status": "ok",
+        "category": category,
+        "file_path": str(file_path),
+        "mode": "overwrite" if overwrite else "append",
     }
 
 

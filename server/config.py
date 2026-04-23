@@ -202,6 +202,40 @@ def load_instance_config(instance_id: str) -> dict:
             except Exception as e:
                 print(f"[Config] Failed to load prompt file: {e}")
 
+    # 4. 拼接持久化记忆目录 data/memory/*.md
+    #    只注入 "short" 档（soul/jarvis/preferences/credentials/memory/projects），
+    #    detail 档（memory_detail/projects_detail）剥离不注入，由 knowledge plugin 索引 + search tool 访问。
+    #    每段包裹在专属 XML tag 内，整体包裹 <persistent_memory>。
+    memory_dir = DATA_DIR / "memory"
+    memory_order = ("soul", "jarvis", "memory", "preferences", "projects", "credentials")
+    memory_sections = []
+    if memory_dir.is_dir():
+        for name in memory_order:
+            f = memory_dir / f"{name}.md"
+            if not f.exists():
+                continue
+            try:
+                content = f.read_text(encoding="utf-8").strip()
+            except Exception as e:
+                print(f"[Config] Failed to load memory/{name}.md: {e}")
+                continue
+            if content:
+                # 包裹，并转义内容中可能的同名闭合标签（防 prompt injection 逃逸）
+                try:
+                    from server.security.prompt_wrapper import wrap_memory
+                    memory_sections.append(wrap_memory(content, tag=name))
+                except Exception:
+                    # fallback：原始拼接
+                    memory_sections.append(f"<{name}>\n{content}\n</{name}>")
+
+    if memory_sections:
+        memory_block = (
+            "<persistent_memory>\n\n"
+            + "\n\n".join(memory_sections)
+            + "\n\n</persistent_memory>"
+        )
+        config["system_prompt"] = memory_block
+
     return config
 
 

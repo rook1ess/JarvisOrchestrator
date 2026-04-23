@@ -202,6 +202,7 @@ class AgentInstance:
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
             allowed_tools=allowed_tools,
+            disallowed_tools=config.get("disallowed_tools", []),
             agents=subagents if subagents else None,
             mcp_servers=mcp_servers,
             permission_mode=permission_mode,
@@ -330,14 +331,41 @@ class AgentInstance:
         return "\n".join(lines)
 
     def _build_prompt_hook(self):
-        """创建 UserPromptSubmit hook 回调，每条消息注入动态上下文"""
+        """UserPromptSubmit hook：每条消息注入动态上下文（时间 + 任务 + 触发式记忆召回）"""
         instance = self  # closure capture
 
         async def on_prompt_submit(input_data, tool_use_id, context):
+            base_ctx = instance._build_hook_context()
+
+            # 触发式记忆召回（轻量：命中关键词才搜，返回标题列表约 80-150 tokens）
+            try:
+                user_text = ""
+                if isinstance(input_data, dict):
+                    user_text = input_data.get("prompt") or input_data.get("user_prompt") or ""
+                    if not user_text and isinstance(input_data.get("messages"), list):
+                        # fallback 从 messages 取最后一条 user
+                        for m in reversed(input_data["messages"]):
+                            if m.get("role") == "user":
+                                c = m.get("content")
+                                if isinstance(c, str):
+                                    user_text = c
+                                elif isinstance(c, list):
+                                    user_text = "\n".join(
+                                        p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text"
+                                    )
+                                break
+                if user_text:
+                    from server.memory_recall import build_recall_context
+                    recall_ctx = await build_recall_context(user_text)
+                    if recall_ctx:
+                        base_ctx = f"{base_ctx}\n\n{recall_ctx}"
+            except Exception as e:
+                print(f"[Agent:{instance.instance_id}] 触发式召回失败（非致命）: {e}")
+
             return {
                 "hookSpecificOutput": {
                     "hookEventName": "UserPromptSubmit",
-                    "additionalContext": instance._build_hook_context(),
+                    "additionalContext": base_ctx,
                 }
             }
 
@@ -402,12 +430,6 @@ class AgentInstance:
         if self.client:
             return await self.client.get_mcp_status()
         return None
-
-    async def sdk_rewind_files(self, user_message_id: str):
-        """Undo file changes to a checkpoint (user_message_id)"""
-        if self.client:
-            await self.client.rewind_files(user_message_id)
-            print(f"[Agent:{self.instance_id}] Files rewound to: {user_message_id}")
 
     async def sdk_get_context_usage(self) -> dict | None:
         """Get detailed context window usage from SDK"""
