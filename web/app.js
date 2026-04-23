@@ -41,6 +41,216 @@
     }
 
     // ============================================
+    // History Lazy Loading (冷加载)
+    // ============================================
+    const INITIAL_HISTORY_COUNT = 30;   // 初始渲染末尾 N 条
+    const HISTORY_PAGE_SIZE = 30;       // 每次上滚加载 N 条
+    const HISTORY_SCROLL_THRESHOLD = 140; // 距顶部多少 px 触发加载
+
+    const _history = {
+        pendingGroups: [],   // 尚未渲染的更早消息（按时间升序，最早在前）
+        loadingOlder: false, // 防重入
+    };
+    let _historyScrollBound = false;
+
+    function _buildMessageGroupElement(msg) {
+        /** 从 grouped 数据构造一个消息 DOM 节点（user / assistant / bg-task 卡片），返回 null 表示跳过 */
+        if (msg.role === 'user') {
+            if (isBackgroundTaskMessage(msg.content)) {
+                const card = createBackgroundTaskCard(msg.content);
+                if (card) return card;
+            }
+            return createMessageElement('user', msg.content);
+        }
+        if (msg.role === 'assistant') {
+            const el = createMessageElement('assistant', '', true);
+            const contentEl = el.querySelector('.message-content');
+            contentEl.innerHTML = `
+                <div class="tools-container"></div>
+                <div class="text-container"></div>
+            `;
+            const toolsContainer = contentEl.querySelector('.tools-container');
+            const textContainer = contentEl.querySelector('.text-container');
+
+            const toolBlocks = (msg.blocks || []).filter(b => b.type === 'tool_use');
+            for (const block of toolBlocks) {
+                addToolIndicator(toolsContainer, block.name);
+            }
+
+            const fullText = (msg.textParts || []).join('\n\n');
+            if (fullText) {
+                textContainer.innerHTML = renderMarkdown(fullText);
+                if (typeof hljs !== 'undefined') {
+                    textContainer.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
+                        hljs.highlightElement(block);
+                    });
+                }
+            }
+
+            if (msg.stats) {
+                const parts = [];
+                if (msg.stats.usage) {
+                    const inp = msg.stats.usage.input_tokens || 0;
+                    const out = msg.stats.usage.output_tokens || 0;
+                    const cache_read = msg.stats.usage.cache_read_input_tokens || 0;
+                    parts.push(`${inp.toLocaleString()} in / ${out.toLocaleString()} out`);
+                    if (cache_read) parts.push(`cache: ${cache_read.toLocaleString()}`);
+                }
+                if (msg.stats.cost_usd != null) parts.push(`$${msg.stats.cost_usd.toFixed(4)}`);
+                if (msg.stats.duration_ms) parts.push(`${(msg.stats.duration_ms / 1000).toFixed(1)}s`);
+                if (parts.length) {
+                    const infoEl = document.createElement('div');
+                    infoEl.className = 'result-context-info';
+                    infoEl.textContent = parts.join(' · ');
+                    textContainer.appendChild(infoEl);
+                }
+            }
+            return el;
+        }
+        return null;
+    }
+
+    function _groupToStateEntry(msg) {
+        if (msg.role === 'user') {
+            return { type: 'user', content: msg.content, message_id: msg.message_id || null };
+        }
+        return { type: 'assistant', content: (msg.textParts || []).join('\n\n') };
+    }
+
+    function _renderHistoryPaged(grouped) {
+        /** 只渲染 grouped 尾部 INITIAL_HISTORY_COUNT 条到 DOM，剩余存 _history.pendingGroups */
+        _history.pendingGroups = [];
+        _history.loadingOlder = false;
+
+        const startIdx = Math.max(0, grouped.length - INITIAL_HISTORY_COUNT);
+        _history.pendingGroups = grouped.slice(0, startIdx);
+
+        const frag = document.createDocumentFragment();
+        const toBindActions = [];
+        for (let i = startIdx; i < grouped.length; i++) {
+            const g = grouped[i];
+            const el = _buildMessageGroupElement(g);
+            if (el) frag.appendChild(el);
+            state.messages.push(_groupToStateEntry(g));
+            const isBgTask = g.role === 'user' && isBackgroundTaskMessage(g.content);
+            if (el && !isBgTask) {
+                toBindActions.push({ el, idx: state.messages.length - 1 });
+            }
+        }
+        elements.messagesWrapper.appendChild(frag);
+        toBindActions.forEach(({ el, idx }) => addMessageActions(el, idx));
+        _updateHistoryLoadingHint();
+        _ensureHistoryScrollBound();
+    }
+
+    function _updateHistoryLoadingHint() {
+        let hint = document.getElementById('historyLoadingHint');
+        if (_history.pendingGroups.length > 0) {
+            if (!hint) {
+                hint = document.createElement('div');
+                hint.id = 'historyLoadingHint';
+                hint.className = 'history-loading-hint';
+                hint.innerHTML = `
+                    <span class="history-dot"></span>
+                    <span class="history-dot"></span>
+                    <span class="history-dot"></span>
+                    <span class="history-label">上滚加载更早消息</span>
+                `;
+                elements.messagesWrapper.insertBefore(hint, elements.messagesWrapper.firstChild);
+            } else if (hint.parentNode !== elements.messagesWrapper || hint !== elements.messagesWrapper.firstChild) {
+                elements.messagesWrapper.insertBefore(hint, elements.messagesWrapper.firstChild);
+            }
+            hint.classList.remove('loading');
+            hint.querySelector('.history-label').textContent = `上滚加载更早消息（还剩 ${_history.pendingGroups.length} 条）`;
+        } else if (hint) {
+            hint.remove();
+        }
+    }
+
+    async function _loadOlderMessages() {
+        if (_history.loadingOlder) return;
+        if (_history.pendingGroups.length === 0) return;
+
+        _history.loadingOlder = true;
+        const hint = document.getElementById('historyLoadingHint');
+        if (hint) {
+            hint.classList.add('loading');
+            hint.querySelector('.history-label').textContent = '加载中…';
+        }
+
+        const container = elements.messagesContainer;
+        const anchorBottomPx = container.scrollHeight - container.scrollTop;
+
+        // 取 pendingGroups 尾部 HISTORY_PAGE_SIZE 条（它们的时间最接近已渲染的首条）
+        const take = Math.min(HISTORY_PAGE_SIZE, _history.pendingGroups.length);
+        const batch = _history.pendingGroups.splice(-take, take);
+
+        const frag = document.createDocumentFragment();
+        const stateInsert = [];
+        const batchItems = [];
+        for (const g of batch) {
+            const el = _buildMessageGroupElement(g);
+            if (el) frag.appendChild(el);
+            stateInsert.push(_groupToStateEntry(g));
+            const isBgTask = g.role === 'user' && isBackgroundTaskMessage(g.content);
+            batchItems.push({ el, isBgTask });
+        }
+
+        // 跳过可能的 hint 节点，prepend 到真实第一条消息之前
+        const firstMessageNode = hint ? hint.nextSibling : elements.messagesWrapper.firstChild;
+        elements.messagesWrapper.insertBefore(frag, firstMessageNode);
+        state.messages.unshift(...stateInsert);
+
+        // unshift 之后，这批新加的消息在 state.messages[0 .. batch.length)
+        batchItems.forEach((item, i) => {
+            if (item.el && !item.isBgTask) {
+                addMessageActions(item.el, i);
+            }
+        });
+
+        // 恢复视觉锚点（保持用户原本看到的位置不动）
+        container.scrollTop = container.scrollHeight - anchorBottomPx;
+
+        _updateHistoryLoadingHint();
+        _history.loadingOlder = false;
+    }
+
+    function _ensureHistoryScrollBound() {
+        if (_historyScrollBound) return;
+        const container = document.getElementById('messagesContainer');
+        if (!container) return;
+        const scrollBtn = document.getElementById('scrollToBottomBtn');
+
+        container.addEventListener('scroll', () => {
+            // 回到底部按钮：离底 > 240px 时显示
+            if (scrollBtn) {
+                const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+                scrollBtn.classList.toggle('visible', distFromBottom > 240);
+            }
+            // 顶部分页加载旧消息
+            if (_history.pendingGroups.length === 0) return;
+            if (container.scrollTop < HISTORY_SCROLL_THRESHOLD) {
+                _loadOlderMessages();
+            }
+        }, { passive: true });
+
+        // 点击回到底部
+        if (scrollBtn) {
+            scrollBtn.addEventListener('click', () => {
+                container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+            });
+        }
+        _historyScrollBound = true;
+    }
+
+    function _resetHistoryState() {
+        _history.pendingGroups = [];
+        _history.loadingOlder = false;
+        const hint = document.getElementById('historyLoadingHint');
+        if (hint) hint.remove();
+    }
+
+    // ============================================
     // Session Message Loading (服务端为唯一 truth)
     // ============================================
     async function loadCurrentSessionMessages() {
@@ -80,6 +290,7 @@
 
             elements.messagesWrapper.innerHTML = '';
             state.messages = [];
+            _resetHistoryState();
 
             // Group consecutive assistant messages into one bubble
             const grouped = [];
@@ -87,10 +298,8 @@
                 if (msg.role === 'assistant') {
                     const prev = grouped[grouped.length - 1];
                     if (prev && prev.role === 'assistant') {
-                        // Merge into previous assistant group
                         prev.blocks.push(...(msg.blocks || []));
                         if (msg.content) prev.textParts.push(msg.content);
-                        // Keep the last stats (most complete — from final ResultMessage)
                         if (msg.stats) prev.stats = msg.stats;
                         continue;
                     }
@@ -105,65 +314,14 @@
                 }
             }
 
-            grouped.forEach(msg => {
-                if (msg.role === 'user') {
-                    const messageEl = createMessageElement('user', msg.content);
-                    elements.messagesWrapper.appendChild(messageEl);
-                    state.messages.push({ type: 'user', content: msg.content, message_id: msg.message_id || null });
-                } else if (msg.role === 'assistant') {
-                    const messageEl = createMessageElement('assistant', '', true);
-                    const contentEl = messageEl.querySelector('.message-content');
-                    contentEl.innerHTML = `
-                        <div class="tools-container"></div>
-                        <div class="text-container"></div>
-                    `;
-                    const toolsContainer = contentEl.querySelector('.tools-container');
-                    const textContainer = contentEl.querySelector('.text-container');
+            _renderHistoryPaged(grouped);
 
-                    // Render all tool_use blocks from merged turns
-                    const toolBlocks = (msg.blocks || []).filter(b => b.type === 'tool_use');
-                    for (const block of toolBlocks) {
-                        addToolIndicator(toolsContainer, block.name);
-                    }
-
-                    // Merge all text parts
-                    const fullText = (msg.textParts || []).join('\n\n');
-                    if (fullText) {
-                        textContainer.innerHTML = renderMarkdown(fullText);
-                        if (typeof hljs !== 'undefined') {
-                            textContainer.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
-                                hljs.highlightElement(block);
-                            });
-                        }
-                    }
-
-                    // Render stats (from final turn)
-                    if (msg.stats) {
-                        const parts = [];
-                        if (msg.stats.usage) {
-                            const inp = msg.stats.usage.input_tokens || 0;
-                            const out = msg.stats.usage.output_tokens || 0;
-                            const cache_read = msg.stats.usage.cache_read_input_tokens || 0;
-                            parts.push(`${inp.toLocaleString()} in / ${out.toLocaleString()} out`);
-                            if (cache_read) parts.push(`cache: ${cache_read.toLocaleString()}`);
-                        }
-                        if (msg.stats.cost_usd != null) parts.push(`$${msg.stats.cost_usd.toFixed(4)}`);
-                        if (msg.stats.duration_ms) parts.push(`${(msg.stats.duration_ms / 1000).toFixed(1)}s`);
-                        if (parts.length) {
-                            const infoEl = document.createElement('div');
-                            infoEl.className = 'result-context-info';
-                            infoEl.textContent = parts.join(' · ');
-                            textContainer.appendChild(infoEl);
-                        }
-                    }
-
-                    elements.messagesWrapper.appendChild(messageEl);
-                    state.messages.push({ type: 'assistant', content: fullText });
-                }
-            });
-
+            // 多次补偿滚动，等图片/字体/marked 渲染铺开后仍然停在底部
             scrollToBottom();
-            console.log(`Loaded ${msgData.messages.length} messages from server (session: ${sessionId.slice(0, 8)}...)`);
+            requestAnimationFrame(() => scrollToBottom());
+            setTimeout(() => scrollToBottom(), 120);
+            setTimeout(() => scrollToBottom(), 400);
+            console.log(`Loaded ${msgData.messages.length} messages (rendered ${state.messages.length}, pending ${_history.pendingGroups.length}) from session ${sessionId.slice(0, 8)}...`);
             return true;
         } catch (error) {
             console.error('Failed to load current session messages:', error);
@@ -208,7 +366,6 @@
         currentMessageId: null,  // message_id of the message we're waiting for a response to
         attachments: [],  // Store pending attachments
         tasks: [],  // Active tasks list
-        bookmarks: [],  // Bookmarked messages
         searchResults: [],  // Search results indices
         currentSearchIndex: -1,  // Current search result position
         searchQuery: '',  // Current search query
@@ -232,8 +389,6 @@
         editingMessageIndex: -1,
         editingOriginalContent: ''
     };
-
-    const BOOKMARKS_KEY = 'jarvis_bookmarks';
 
     // ============================================
     // Typewriter Effect Engine
@@ -549,13 +704,70 @@
 
     function renderMarkdown(text) {
         if (typeof marked !== 'undefined') {
-            return marked.parse(text);
+            const html = marked.parse(text);
+            // 所有链接新窗打开 + 防 referrer 泄漏
+            return html.replace(/<a(\s+)href=/gi, '<a target="_blank" rel="noopener noreferrer"$1href=');
         }
         return escapeHtml(text).replace(/\n/g, '<br>');
     }
 
     function scrollToBottom() {
         elements.messagesContainer.scrollTop = elements.messagesContainer.scrollHeight;
+    }
+
+    // Stick-to-bottom: 仅当用户已在底部附近时才自动滚动，用户往上翻时不打扰
+    function isNearBottom(threshold = 120) {
+        const c = elements.messagesContainer;
+        return c.scrollHeight - c.scrollTop - c.clientHeight <= threshold;
+    }
+
+    function smartScroll() {
+        if (isNearBottom()) scrollToBottom();
+    }
+
+    // ============================================
+    // Image Lightbox (点击消息里的图片放大查看)
+    // ============================================
+    let _lightbox = null;
+    function getLightbox() {
+        if (_lightbox) return _lightbox;
+        _lightbox = document.createElement('div');
+        _lightbox.className = 'image-lightbox';
+        _lightbox.innerHTML = `
+            <button class="lightbox-close" aria-label="Close">&times;</button>
+            <img alt="">
+        `;
+        document.body.appendChild(_lightbox);
+        // 点击背景或关闭按钮关闭
+        _lightbox.addEventListener('click', (e) => {
+            if (e.target === _lightbox || e.target.classList.contains('lightbox-close')) {
+                _lightbox.classList.remove('active');
+            }
+        });
+        return _lightbox;
+    }
+
+    function openLightbox(src, alt) {
+        const lb = getLightbox();
+        const img = lb.querySelector('img');
+        img.src = src;
+        img.alt = alt || '';
+        lb.classList.add('active');
+    }
+
+    function closeLightbox() {
+        if (_lightbox) _lightbox.classList.remove('active');
+    }
+
+    function enhanceImages() {
+        const imgs = elements.messagesWrapper.querySelectorAll('img:not([data-zoomable])');
+        imgs.forEach(img => {
+            img.dataset.zoomable = '1';
+            img.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openLightbox(img.src, img.alt);
+            });
+        });
     }
 
     function setStatus(status, text) {
@@ -571,6 +783,20 @@
                 elements.roleName.textContent = currentInstance;
             } else {
                 elements.roleName.textContent = text;
+            }
+        }
+
+        // AI working status strip (above input box)
+        const strip = document.getElementById('aiStatusStrip');
+        const stripText = document.getElementById('aiStatusText');
+        if (strip && stripText) {
+            if (status === 'busy') {
+                // 把尾部 "..." 去掉，交给 CSS 的 dots 动画表达"正在进行"
+                const cleaned = (text || 'Working').replace(/\.{2,}$/, '').trim();
+                stripText.textContent = cleaned;
+                strip.classList.add('visible');
+            } else {
+                strip.classList.remove('visible');
             }
         }
     }
@@ -713,6 +939,7 @@
             // 清空 UI 并加载该 session 的消息
             elements.messagesWrapper.innerHTML = '';
             state.messages = [];
+            _resetHistoryState();
 
             const msgResponse = await fetch(`/api/claude-sessions/${sessionId}/messages`);
             const msgData = await msgResponse.json();
@@ -720,7 +947,6 @@
             if (msgData.messages && msgData.messages.length > 0) {
                 if (elements.welcomeMessage) elements.welcomeMessage.classList.add('hidden');
 
-                // 复用 loadCurrentSessionMessages 的分组渲染逻辑
                 const grouped = [];
                 for (const msg of msgData.messages) {
                     if (msg.role === 'assistant') {
@@ -742,35 +968,7 @@
                     }
                 }
 
-                for (const msg of grouped) {
-                    if (msg.role === 'user') {
-                        addMessage('user', msg.content);
-                    } else {
-                        const text = msg.textParts?.join('\n\n') || msg.content || '';
-                        const el = createMessageElement('assistant', '');
-                        const contentEl = el.querySelector('.message-content');
-                        if (contentEl && text) {
-                            contentEl.innerHTML = renderMarkdown(text);
-                            enhanceCodeBlocks();
-                        }
-                        if (msg.stats) {
-                            const parts = [];
-                            if (msg.stats.usage) {
-                                parts.push(`${(msg.stats.usage.input_tokens||0).toLocaleString()} in / ${(msg.stats.usage.output_tokens||0).toLocaleString()} out`);
-                            }
-                            if (msg.stats.cost_usd != null) parts.push(`$${msg.stats.cost_usd.toFixed(4)}`);
-                            if (msg.stats.duration_ms) parts.push(`${(msg.stats.duration_ms/1000).toFixed(1)}s`);
-                            if (parts.length) {
-                                const info = document.createElement('div');
-                                info.className = 'result-context-info';
-                                info.textContent = parts.join(' · ');
-                                contentEl.appendChild(info);
-                            }
-                        }
-                        elements.messagesWrapper.appendChild(el);
-                        state.messages.push({ type: 'assistant', content: text });
-                    }
-                }
+                _renderHistoryPaged(grouped);
                 scrollToBottom();
             } else {
                 showWelcomeMessage();
@@ -1012,8 +1210,8 @@
             const elapsed = formatElapsedTime(task.registered_at);
             const remainingTime = formatRemainingTime(task.expires_at);
 
-            const tmuxIndicator = task.tmux_alive === true ? '<span class="task-tmux alive" title="tmux alive">●</span>'
-                : task.tmux_alive === false ? '<span class="task-tmux dead" title="tmux dead">●</span>' : '';
+            const tmuxIndicator = task.tmux_alive === true ? '<span class="task-tmux alive" title="tmux 存活">●</span>'
+                : task.tmux_alive === false ? '<span class="task-tmux dead" title="tmux 已结束">●</span>' : '';
 
             return `
                 <div class="task-item ${task.status}" data-task-id="${escapeHtml(task.task_id)}">
@@ -1069,23 +1267,23 @@
         if (elapsed < 0) return '';
 
         const seconds = Math.floor(elapsed / 1000);
-        if (seconds < 60) return `${seconds}s`;
+        if (seconds < 60) return `已运行 ${seconds} 秒`;
         const minutes = Math.floor(seconds / 60);
-        if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+        if (minutes < 60) return `已运行 ${minutes} 分${seconds % 60 > 0 ? ' ' + (seconds % 60) + ' 秒' : ''}`;
         const hours = Math.floor(minutes / 60);
-        return `${hours}h ${minutes % 60}m`;
+        return `已运行 ${hours} 小时${minutes % 60 > 0 ? ' ' + (minutes % 60) + ' 分' : ''}`;
     }
 
     function formatRemainingTime(expiresAt) {
         if (!expiresAt) return '';
         const remaining = expiresAt * 1000 - Date.now();
-        if (remaining <= 0) return 'Expired';
+        if (remaining <= 0) return '已超时';
 
         const minutes = Math.floor(remaining / 60000);
-        if (minutes < 1) return '<1m';
-        if (minutes < 60) return `${minutes}m`;
+        if (minutes < 1) return '剩 <1 分';
+        if (minutes < 60) return `剩 ${minutes} 分`;
         const hours = Math.floor(minutes / 60);
-        return `${hours}h ${minutes % 60}m`;
+        return `剩 ${hours} 小时${minutes % 60 > 0 ? ' ' + (minutes % 60) + ' 分' : ''}`;
     }
 
     function handleTaskUpdate(data) {
@@ -1465,7 +1663,7 @@
                             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
                         </svg>
-                        Edit Message
+                        编辑消息
                     </h3>
                     <button type="button" class="modal-close" id="closeEditModalBtn">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1476,8 +1674,8 @@
                 </div>
                 <div class="modal-body">
                     <div class="form-group">
-                        <label for="editMessageTextarea">Message Content</label>
-                        <textarea id="editMessageTextarea" class="form-textarea" rows="8" placeholder="Enter your message..."></textarea>
+                        <label for="editMessageTextarea">消息内容</label>
+                        <textarea id="editMessageTextarea" class="form-textarea" rows="10" placeholder="输入要重新发送的内容..."></textarea>
                     </div>
                     <div class="edit-info">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1485,17 +1683,17 @@
                             <line x1="12" y1="16" x2="12" y2="12"/>
                             <line x1="12" y1="8" x2="12.01" y2="8"/>
                         </svg>
-                        <span>Editing will resend the message and regenerate the response</span>
+                        <span>保存后将以新内容重新发送这条消息。</span>
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" id="cancelEditBtn">Cancel</button>
+                    <button type="button" class="btn btn-secondary" id="cancelEditBtn">取消</button>
                     <button type="button" class="btn btn-primary" id="confirmEditBtn">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <line x1="22" y1="2" x2="11" y2="13"></line>
                             <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
                         </svg>
-                        Save & Resend
+                        保存并重发
                     </button>
                 </div>
             </div>
@@ -1532,7 +1730,16 @@
         const newContent = textarea.value.trim();
 
         if (!newContent) {
-            showToast('Error', 'Message cannot be empty', 'error');
+            showToast('Error', '内容不能为空', 'error');
+            return;
+        }
+
+        const messageIndex = state.editingMessageIndex;
+        const message = state.messages[messageIndex];
+
+        if (!message || !message.message_id) {
+            showToast('无法编辑', '此消息缺少 message_id（可能是流式未保存的新消息），请刷新后再试', 'error', 4000);
+            closeEditModal();
             return;
         }
 
@@ -1541,21 +1748,74 @@
             return;
         }
 
-        const messageIndex = state.editingMessageIndex;
         closeEditModal();
+        await forkAndSend({
+            messageId: message.message_id,
+            content: newContent,
+            attachments: message.attachments || [],
+        });
+    }
 
-        // Remove all messages from the edited message onwards
-        const removedMessages = state.messages.splice(messageIndex);
+    // Retry: 让小克重新回复此 user 消息（用原内容 fork 再发一次）
+    async function retryUserMessage(messageIndex) {
+        if (messageIndex < 0 || messageIndex >= state.messages.length) return;
+        const message = state.messages[messageIndex];
+        if (!message || message.type !== 'user' || !message.message_id) {
+            showToast('无法重试', '此消息缺少 message_id', 'error', 3000);
+            return;
+        }
+        if (!confirm('重试这条消息？\n原 session 会被删除，在新分叉里重新发送。')) return;
 
-        // Remove corresponding DOM elements
-        const messageElements = elements.messagesWrapper.querySelectorAll('.message');
-        for (let i = messageIndex; i < messageElements.length; i++) {
-            messageElements[i].remove();
+        await forkAndSend({
+            messageId: message.message_id,
+            content: message.content,
+            attachments: message.attachments || [],
+        });
+    }
+
+    // 核心：从指定消息处 fork 出新 session，删除原 session，在新 session 里发送内容
+    async function forkAndSend({ messageId, content, attachments }) {
+        if (!currentClaudeSessionId) {
+            showToast('Error', '当前无 session，无法 fork', 'error');
+            return;
         }
 
-        // Resend the edited message
-        sendMessage(newContent, removedMessages[0]?.attachments || []);
-        showToast('Message Edited', 'Regenerating response...', 'info', 2000);
+        try {
+            const resp = await fetch(`/api/claude-sessions/${currentClaudeSessionId}/fork-from-message`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    before_message_id: messageId,
+                    delete_source: true,
+                    instance_id: currentInstance,
+                }),
+            });
+
+            if (!resp.ok) {
+                if (resp.status === 404) {
+                    showToast('功能未就绪', '后端 fork API 尚未部署，请重启 Jarvis 服务后再试', 'warning', 5000);
+                } else {
+                    const err = await resp.json().catch(() => ({}));
+                    showToast('Error', err.detail || `分叉失败 (${resp.status})`, 'error', 3000);
+                }
+                return;
+            }
+
+            const data = await resp.json();
+            const newSessionId = data.new_session_id;
+            if (!newSessionId) {
+                showToast('Error', '后端未返回新 session id', 'error');
+                return;
+            }
+
+            // 复用 switchClaudeSession 清空 DOM + 加载新 session 消息
+            await window.switchClaudeSession(newSessionId);
+
+            // 等 DOM 稳定后发送编辑后的内容
+            setTimeout(() => sendMessage(content, attachments), 150);
+        } catch (err) {
+            showToast('Error', err.message, 'error', 3000);
+        }
     }
 
     function initEditModal() {
@@ -1667,7 +1927,7 @@
         }
     }
 
-    function addMessage(type, content, attachments = []) {
+    function addMessage(type, content, attachments = [], messageId = null) {
         // Hide welcome message
         if (elements.welcomeMessage) {
             elements.welcomeMessage.classList.add('hidden');
@@ -1706,9 +1966,9 @@
         elements.messagesWrapper.appendChild(messageEl);
         scrollToBottom();
 
-        state.messages.push({ type, content, attachments });
+        state.messages.push({ type, content, attachments, message_id: messageId });
 
-        // Add message actions (bookmark, copy)
+        // Add message actions (edit / retry / copy)
         addMessageActions(messageEl, state.messages.length - 1);
 
         // Enhance code blocks
@@ -1779,6 +2039,70 @@
         return card;
     }
 
+    // ============================================
+    // Background Task Card
+    // Claude 后台 Bash 命令完成/失败时 SDK 注入的 user role 消息
+    // 格式（SDK 的 task-notification XML）：
+    //   <task-notification>
+    //     <task-id>xxx</task-id>
+    //     <tool-use-id>toolu_xxx</tool-use-id>
+    //     <output-file>/path/xxx.output</output-file>
+    //     <status>failed|completed</status>
+    //     <summary>Background command "xxx" failed with exit code N</summary>
+    //   </task-notification>
+    // ============================================
+    function isBackgroundTaskMessage(content) {
+        return typeof content === 'string' && content.trim().startsWith('<task-notification>');
+    }
+
+    function createBackgroundTaskCard(content) {
+        const extract = (tag) => {
+            const m = content.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, 'i'));
+            return m ? m[1].trim() : '';
+        };
+
+        const taskId = extract('task-id');
+        const status = extract('status');
+        const summary = extract('summary');
+
+        if (!taskId && !status) return null;
+
+        const isFailure = status === 'failed';
+        const statusIcon = isFailure ? '❌' : '✅';
+
+        const descMatch = summary.match(/Background command "([^"]+)"/);
+        const description = descMatch ? descMatch[1] : (taskId || '未知任务');
+
+        const exitMatch = summary.match(/exit code (\d+)/);
+        const exitCode = exitMatch ? exitMatch[1] : null;
+
+        const statusLabel = status + (exitCode ? ` (exit ${exitCode})` : '');
+
+        const card = document.createElement('div');
+        card.className = `bg-task-card ${isFailure ? 'failure' : 'normal'}`;
+
+        let html = `
+            <div class="bg-task-header">
+                <span class="bg-task-icon">⚙</span>
+                <span class="bg-task-title">后台任务 · ${escapeHtml(description)}</span>
+                <span class="bg-task-divider">·</span>
+                <span class="bg-task-status">${statusIcon} ${escapeHtml(statusLabel)}</span>
+            </div>
+        `;
+
+        if (summary) {
+            html += `
+                <details class="bg-task-details">
+                    <summary>查看详情</summary>
+                    <pre class="bg-task-body">${escapeHtml(summary)}</pre>
+                </details>
+            `;
+        }
+
+        card.innerHTML = html;
+        return card;
+    }
+
     function createStreamingMessage() {
         const messageEl = createMessageElement('assistant', '', true);
         const contentEl = messageEl.querySelector('.message-content');
@@ -1786,7 +2110,7 @@
         // Create separate containers for tools and text
         contentEl.innerHTML = `
             <div class="tools-container"></div>
-            <div class="text-container"><span class="response-hint">Responding...</span></div>
+            <div class="text-container"><span class="typing-indicator" aria-label="正在生成"><span></span><span></span><span></span></span></div>
         `;
 
         elements.messagesWrapper.appendChild(messageEl);
@@ -1840,7 +2164,7 @@
             `<div class="tools-list-item">${escapeHtml(name)}${count > 1 ? ` <span class="tool-count-badge">\u00d7${count}</span>` : ''}</div>`
         ).join('');
 
-        scrollToBottom();
+        smartScroll();
     }
 
     // ============================================
@@ -1915,7 +2239,7 @@
                         // 子进程回调/超时 → 渲染为紧凑卡片
                         const card = createHookCallbackCard(data.source, data.content);
                         elements.messagesWrapper.appendChild(card);
-                        scrollToBottom();
+                        smartScroll();
                     } else {
                         addMessage('user', `[${data.source || 'system'}] ${data.content}`);
                     }
@@ -1944,7 +2268,7 @@
                             currentTypewriter.start(
                                 (text) => {
                                     state.textContainer.innerHTML = renderMarkdown(text);
-                                    scrollToBottom();
+                                    smartScroll();
                                 },
                                 (finalText) => {
                                     enhanceCodeBlocks();
@@ -1959,7 +2283,7 @@
                         currentTypewriter.append(data.content);
                     } else {
                         state.textContainer.innerHTML = renderMarkdown(state.fullContent);
-                        scrollToBottom();
+                        smartScroll();
                     }
                 }
                 break;
@@ -1976,7 +2300,7 @@
                             currentTypewriter.start(
                                 (text) => {
                                     state.textContainer.innerHTML = renderMarkdown(text);
-                                    scrollToBottom();
+                                    smartScroll();
                                 },
                                 (finalText) => {
                                     enhanceCodeBlocks();
@@ -1991,7 +2315,7 @@
                         currentTypewriter.append(data.content);
                     } else {
                         state.textContainer.innerHTML = renderMarkdown(state.fullContent);
-                        scrollToBottom();
+                        smartScroll();
                     }
                 }
                 break;
@@ -2041,7 +2365,7 @@
                     const contentEl = thinkingEl.querySelector('.thinking-content');
                     if (contentEl && data.content) {
                         contentEl.textContent += data.content;
-                        scrollToBottom();
+                        smartScroll();
                     }
                 }
                 break;
@@ -2063,11 +2387,6 @@
                 if (!_isForCurrentMessage(data)) break;
                 console.log('Init:', data);
                 setStatus('busy', 'Responding...');
-                // Update hint text
-                if (state.textContainer) {
-                    const hint = state.textContainer.querySelector('.response-hint');
-                    if (hint) hint.textContent = 'Responding...';
-                }
                 if (data.session_id) {
                     currentClaudeSessionId = data.session_id;
                 }
@@ -2123,6 +2442,12 @@
                     currentTypewriter = null;
                 }
 
+                // 兜底清除 typing indicator（若只发工具调用没文本，或完全空响应）
+                if (state.textContainer) {
+                    const indicator = state.textContainer.querySelector('.typing-indicator');
+                    if (indicator) indicator.remove();
+                }
+
                 // Store final content
                 if (state.fullContent) {
                     state.messages.push({ type: 'assistant', content: state.fullContent });
@@ -2161,6 +2486,10 @@
                 }
 
                 if (state.textContainer) {
+                    // 清除 typing indicator（如果完全没有 text_delta 到达就被取消）
+                    const indicator = state.textContainer.querySelector('.typing-indicator');
+                    if (indicator) indicator.remove();
+
                     const stopMsg = document.createElement('div');
                     stopMsg.className = 'message-stopped';
                     stopMsg.innerHTML = `
@@ -2261,7 +2590,7 @@
         setStatus('busy', 'Starting...');
 
         // Add user message with attachments preview
-        addMessage('user', message, attachments);
+        addMessage('user', message, attachments, messageId);
 
         // Create streaming message container
         const { messageEl, contentEl, toolsContainer, textContainer } = createStreamingMessage();
@@ -2472,12 +2801,12 @@
 
             // Escape: Close modals/panels or stop generation
             if (e.key === 'Escape') {
-                if (searchBar?.classList.contains('active')) {
-                    closeSearch();
+                if (_lightbox?.classList.contains('active')) {
+                    closeLightbox();
                     return;
                 }
-                if (bookmarksPanel?.classList.contains('active')) {
-                    closeBookmarksPanel();
+                if (searchBar?.classList.contains('active')) {
+                    closeSearch();
                     return;
                 }
                 if (shortcutsPanel?.classList.contains('active')) {
@@ -2510,13 +2839,6 @@
             if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
                 e.preventDefault();
                 toggleSearch();
-                return;
-            }
-
-            // Ctrl/Cmd + B: Toggle bookmarks
-            if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
-                e.preventDefault();
-                toggleBookmarksPanel();
                 return;
             }
 
@@ -2745,190 +3067,6 @@
     }
 
     // ============================================
-    // Bookmark Functionality
-    // ============================================
-    const bookmarksPanel = document.getElementById('bookmarksPanel');
-    const bookmarksList = document.getElementById('bookmarksList');
-    const bookmarksToggleBtn = document.getElementById('bookmarksToggleBtn');
-    const closeBookmarksBtn = document.getElementById('closeBookmarksBtn');
-    const clearBookmarksBtn = document.getElementById('clearBookmarksBtn');
-
-    function loadBookmarks() {
-        try {
-            const data = localStorage.getItem(BOOKMARKS_KEY);
-            if (data) {
-                state.bookmarks = JSON.parse(data);
-            }
-        } catch (e) {
-            console.warn('Failed to load bookmarks:', e);
-            state.bookmarks = [];
-        }
-    }
-
-    function saveBookmarks() {
-        try {
-            localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(state.bookmarks));
-        } catch (e) {
-            console.warn('Failed to save bookmarks:', e);
-        }
-    }
-
-    function toggleBookmarksPanel() {
-        if (bookmarksPanel.classList.contains('active')) {
-            closeBookmarksPanel();
-        } else {
-            openBookmarksPanel();
-        }
-    }
-
-    function openBookmarksPanel() {
-        bookmarksPanel.classList.add('active');
-        bookmarksToggleBtn?.classList.add('active');
-        renderBookmarks();
-    }
-
-    function closeBookmarksPanel() {
-        bookmarksPanel.classList.remove('active');
-        bookmarksToggleBtn?.classList.remove('active');
-    }
-
-    function renderBookmarks() {
-        if (!bookmarksList) return;
-
-        if (state.bookmarks.length === 0) {
-            bookmarksList.innerHTML = `
-                <div class="bookmarks-empty">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-                    </svg>
-                    <p>No bookmarked messages yet.</p>
-                    <p>Click the bookmark icon on any message to save it.</p>
-                </div>
-            `;
-            return;
-        }
-
-        bookmarksList.innerHTML = state.bookmarks.map((bookmark, index) => {
-            const senderIcon = bookmark.type === 'user'
-                ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                       <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-                       <circle cx="12" cy="7" r="4"/>
-                   </svg>`
-                : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                       <path d="M12 2L2 7L12 12L22 7L12 2Z"/>
-                       <path d="M2 17L12 22L22 17"/>
-                       <path d="M2 12L12 17L22 12"/>
-                   </svg>`;
-
-            const preview = bookmark.content.length > 200
-                ? bookmark.content.substring(0, 200) + '...'
-                : bookmark.content;
-
-            return `
-                <div class="bookmark-item" data-index="${index}">
-                    <div class="bookmark-item-header">
-                        <span class="bookmark-item-sender ${bookmark.type}">
-                            ${senderIcon}
-                            ${bookmark.type === 'user' ? 'You' : 'Agent'}
-                        </span>
-                        <span class="bookmark-item-time">${formatTime(bookmark.timestamp)}</span>
-                    </div>
-                    <div class="bookmark-item-content">${escapeHtml(preview)}</div>
-                    <div class="bookmark-item-actions">
-                        <button class="bookmark-action-btn" onclick="window.copyBookmark(${index})">Copy</button>
-                        <button class="bookmark-action-btn delete" onclick="window.removeBookmark(${index})">Remove</button>
-                    </div>
-                </div>
-            `;
-        }).join('');
-    }
-
-    function addBookmark(messageIndex) {
-        if (messageIndex < 0 || messageIndex >= state.messages.length) return;
-
-        const message = state.messages[messageIndex];
-        const bookmark = {
-            type: message.type,
-            content: message.content,
-            timestamp: Date.now(),
-            messageIndex: messageIndex
-        };
-
-        // Check if already bookmarked
-        const existingIndex = state.bookmarks.findIndex(b =>
-            b.content === bookmark.content && b.type === bookmark.type
-        );
-
-        if (existingIndex === -1) {
-            state.bookmarks.unshift(bookmark);
-            saveBookmarks();
-            showToast('Bookmarked', 'Message saved to bookmarks', 'success', 2000);
-            updateBookmarkButtons();
-        }
-    }
-
-    function removeBookmarkByContent(type, content) {
-        const index = state.bookmarks.findIndex(b =>
-            b.content === content && b.type === type
-        );
-        if (index !== -1) {
-            state.bookmarks.splice(index, 1);
-            saveBookmarks();
-            renderBookmarks();
-            updateBookmarkButtons();
-            showToast('Removed', 'Bookmark removed', 'info', 2000);
-        }
-    }
-
-    window.removeBookmark = function(index) {
-        if (index >= 0 && index < state.bookmarks.length) {
-            state.bookmarks.splice(index, 1);
-            saveBookmarks();
-            renderBookmarks();
-            updateBookmarkButtons();
-        }
-    };
-
-    window.copyBookmark = function(index) {
-        if (index >= 0 && index < state.bookmarks.length) {
-            const content = state.bookmarks[index].content;
-            navigator.clipboard.writeText(content).then(() => {
-                showToast('Copied', 'Content copied to clipboard', 'success', 2000);
-            }).catch(() => {
-                showToast('Error', 'Failed to copy content', 'error');
-            });
-        }
-    };
-
-    function clearAllBookmarks() {
-        if (state.bookmarks.length === 0) return;
-        state.bookmarks = [];
-        saveBookmarks();
-        renderBookmarks();
-        updateBookmarkButtons();
-        showToast('Cleared', 'All bookmarks removed', 'info', 2000);
-    }
-
-    function isBookmarked(type, content) {
-        return state.bookmarks.some(b => b.content === content && b.type === type);
-    }
-
-    function updateBookmarkButtons() {
-        const messages = elements.messagesWrapper.querySelectorAll('.message');
-        messages.forEach((msg, index) => {
-            const btn = msg.querySelector('.bookmark-btn');
-            if (btn && state.messages[index]) {
-                const message = state.messages[index];
-                const bookmarked = isBookmarked(message.type, message.content);
-                btn.classList.toggle('bookmarked', bookmarked);
-            }
-        });
-    }
-
-    // ============================================
-    // Context Indicator
-    // ============================================
-    // ============================================
     // Context Usage (via SDK get_context_usage API)
     // ============================================
     function initContextIndicator() {
@@ -3093,6 +3231,8 @@
     // Model Selector
     // ============================================
     const MODELS = [
+        { value: 'claude-opus-4-7', label: 'Opus 4.7' },
+        { value: 'claude-opus-4-7[1m]', label: 'Opus 4.7 [1M]' },
         { value: 'opus', label: 'Opus 4.6' },
         { value: 'opus[1m]', label: 'Opus 4.6 [1M]' },
         { value: 'sonnet', label: 'Sonnet 4.6' },
@@ -3274,16 +3414,6 @@
                     }
                 });
 
-                // Add bookmarked messages section if any
-                if (state.bookmarks.length > 0) {
-                    markdown += `\n---\n\n# Bookmarked Messages\n\n`;
-                    state.bookmarks.forEach((bookmark, index) => {
-                        const sender = bookmark.type === 'user' ? 'You' : 'Agent';
-                        markdown += `### Bookmark ${index + 1} (${sender})\n\n`;
-                        markdown += `${bookmark.content}\n\n`;
-                    });
-                }
-
                 // Create and download file
                 const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
                 const url = URL.createObjectURL(blob);
@@ -3343,7 +3473,7 @@
     }
 
     // ============================================
-    // Message Actions (Bookmark, Copy, Edit)
+    // Message Actions (Edit / Retry / Copy)
     // ============================================
     function addMessageActions(messageEl, messageIndex) {
         // Check if actions already exist
@@ -3355,33 +3485,36 @@
         const message = state.messages[messageIndex];
         if (!message) return;
 
-        const bookmarked = isBookmarked(message.type, message.content);
         const isUserMessage = message.type === 'user';
+        const messageIdSnapshot = message.message_id || null;
+        const contentSnapshot = message.content || '';
+        const canForkFrom = isUserMessage && Boolean(messageIdSnapshot);
 
-        const hasRewind = isUserMessage && message.message_id;
+        // onclick 时重查 index — 防止 history prepend 导致 state.messages index 漂移
+        function resolveIndex() {
+            if (messageIdSnapshot) {
+                const idx = state.messages.findIndex(m => m.message_id === messageIdSnapshot);
+                if (idx !== -1) return idx;
+            }
+            return messageIndex;
+        }
+
         actionsDiv.innerHTML = `
-            ${isUserMessage ? `
-                <button class="message-action-btn edit-btn" title="${window.i18n?.t('message.edit') || 'Edit message'}">
+            ${canForkFrom ? `
+                <button class="message-action-btn edit-btn" title="编辑并重发">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                         <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
                     </svg>
                 </button>
-            ` : ''}
-            ${hasRewind ? `
-                <button class="message-action-btn rewind-btn" title="Rewind to here" data-message-id="${message.message_id}">
+                <button class="message-action-btn retry-btn" title="重新生成回复" data-message-id="${messageIdSnapshot}">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="1 4 1 10 7 10"></polyline>
-                        <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+                        <polyline points="23 4 23 10 17 10"/>
+                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
                     </svg>
                 </button>
             ` : ''}
-            <button class="message-action-btn bookmark-btn ${bookmarked ? 'bookmarked' : ''}" title="${window.i18n?.t('message.bookmark') || 'Bookmark message'}">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-                </svg>
-            </button>
-            <button class="message-action-btn copy-btn" title="${window.i18n?.t('message.copy') || 'Copy message'}">
+            <button class="message-action-btn copy-btn" title="复制">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
                     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
@@ -3389,61 +3522,28 @@
             </button>
         `;
 
-        // Edit button handler (only for user messages)
         const editBtn = actionsDiv.querySelector('.edit-btn');
         if (editBtn) {
             editBtn.onclick = function(e) {
                 e.stopPropagation();
-                openEditModal(messageIndex);
+                openEditModal(resolveIndex());
             };
         }
 
-        // Rewind button handler
-        const rewindBtn = actionsDiv.querySelector('.rewind-btn');
-        if (rewindBtn) {
-            rewindBtn.onclick = async function(e) {
+        const retryBtn = actionsDiv.querySelector('.retry-btn');
+        if (retryBtn) {
+            retryBtn.onclick = async function(e) {
                 e.stopPropagation();
-                const msgId = rewindBtn.dataset.messageId;
-                if (!msgId) return;
-                if (!confirm('回退到此消息时的文件状态？此操作会撤销之后的所有文件变更。')) return;
-                try {
-                    const resp = await fetch(`/api/instances/${currentInstance}/rewind`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ user_message_id: msgId }),
-                    });
-                    const result = await resp.json();
-                    if (resp.ok) {
-                        showToast('Rewound', `Files rewound to message ${msgId.slice(0, 8)}...`, 'success', 3000);
-                    } else {
-                        showToast('Error', result.detail || 'Rewind failed', 'error', 3000);
-                    }
-                } catch (err) {
-                    showToast('Error', err.message, 'error', 3000);
-                }
+                await retryUserMessage(resolveIndex());
             };
         }
-
-        const bookmarkBtn = actionsDiv.querySelector('.bookmark-btn');
-        bookmarkBtn.onclick = function(e) {
-            e.stopPropagation();
-            if (bookmarkBtn.classList.contains('bookmarked')) {
-                removeBookmarkByContent(message.type, message.content);
-                bookmarkBtn.classList.remove('bookmarked');
-            } else {
-                addBookmark(messageIndex);
-                bookmarkBtn.classList.add('bookmarked');
-            }
-        };
 
         const copyBtn = actionsDiv.querySelector('.copy-btn');
         copyBtn.onclick = function(e) {
             e.stopPropagation();
-            if (message) {
-                navigator.clipboard.writeText(message.content).then(() => {
-                    showToast('Copied', 'Message copied to clipboard', 'success', 2000);
-                });
-            }
+            navigator.clipboard.writeText(contentSnapshot).then(() => {
+                showToast('已复制', '消息已复制到剪贴板', 'success', 2000);
+            });
         };
 
         messageEl.appendChild(actionsDiv);
@@ -3477,7 +3577,7 @@
     }
 
     // Task filter state
-    let currentTaskFilter = 'all';
+    let currentTaskFilter = 'running';
 
     // Load and render tasks in drawer
     async function loadTasksForDrawer() {
@@ -3534,13 +3634,27 @@
         return state.tasks;
     }
 
+    const _TASK_STATUS_LABELS = {
+        running: '进行中',
+        done: '已完成',
+        blocked: '阻塞',
+        timeout: '超时',
+        failed: '失败',
+    };
+    const _TASK_FILTER_EMPTY = {
+        all: '暂无任务',
+        running: '暂无进行中的任务',
+        done: '暂无已完成任务',
+        blocked: '暂无阻塞任务',
+    };
+
     function renderDrawerTasks() {
         if (!drawerTaskList) return;
 
         const filteredTasks = getFilteredTasks();
 
         if (filteredTasks.length === 0) {
-            const emptyMessage = currentTaskFilter === 'all' ? 'No tasks' : `No ${currentTaskFilter} tasks`;
+            const emptyMessage = _TASK_FILTER_EMPTY[currentTaskFilter] || '暂无任务';
             drawerTaskList.innerHTML = `<div class="drawer-empty-state">${emptyMessage}</div>`;
             return;
         }
@@ -3552,10 +3666,11 @@
             const remaining = formatRemainingTime(task.expires_at);
             const hasPrompt = task.prompt && task.prompt.length > 0;
             const promptId = `prompt-${escapeHtml(task.task_id)}`;
+            const statusLabel = _TASK_STATUS_LABELS[task.status] || task.status;
 
             return `
                 <div class="drawer-task-item" data-task-id="${escapeHtml(task.task_id)}">
-                    <button class="drawer-task-delete-btn" onclick="window.removeTaskFromDrawer('${escapeHtml(task.task_id)}')" title="Delete task">
+                    <button class="drawer-task-delete-btn" onclick="window.removeTaskFromDrawer('${escapeHtml(task.task_id)}')" title="删除任务">
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <line x1="18" y1="6" x2="6" y2="18"></line>
                             <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -3563,15 +3678,15 @@
                     </button>
                     <div class="drawer-task-item-header">
                         <span class="drawer-task-id">${escapeHtml(task.task_id)}</span>
-                        ${task.tmux_alive === true ? '<span class="drawer-task-tmux alive" title="tmux alive">● tmux</span>'
-                            : task.tmux_alive === false ? '<span class="drawer-task-tmux dead" title="tmux dead">● tmux</span>' : ''}
-                        <span class="drawer-task-status ${task.status}">${task.status}</span>
+                        ${task.tmux_alive === true ? '<span class="drawer-task-tmux alive" title="tmux 存活">● tmux</span>'
+                            : task.tmux_alive === false ? '<span class="drawer-task-tmux dead" title="tmux 已结束">● tmux</span>' : ''}
+                        <span class="drawer-task-status ${task.status}">${statusLabel}</span>
                     </div>
                     ${task.description ? `<div class="drawer-task-desc">${escapeHtml(task.description)}</div>` : ''}
                     ${hasPrompt ? `
                         <div class="drawer-task-prompt-tag" onclick="this.classList.toggle('open');document.getElementById('${promptId}').classList.toggle('expanded')">
                             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
-                            <span>Prompt</span>
+                            <span>指令</span>
                         </div>
                         <div class="drawer-task-prompt" id="${promptId}"><pre>${escapeHtml(task.prompt)}</pre></div>
                     ` : ''}
@@ -3581,7 +3696,7 @@
                         </div>
                     ` : ''}
                     <div class="drawer-task-meta">
-                        <span>${elapsed || 'Just started'}</span>
+                        <span>${elapsed || '刚启动'}</span>
                         <span>${remaining}</span>
                     </div>
                     ${task.current_step ? `<div class="drawer-task-desc" style="font-size: 11px; margin-top: 4px;">${escapeHtml(task.current_step)}</div>` : ''}
@@ -3606,59 +3721,12 @@
         try {
             await fetch(`/task/${taskId}`, { method: 'DELETE' });
             await loadTasksForDrawer();
-            showToast('Task Removed', `Task ${taskId} has been removed`, 'info', 2000);
+            showToast('任务已删除', `任务 ${taskId} 已删除`, 'info', 2000);
         } catch (error) {
             console.error('Failed to remove task:', error);
-            showToast('Error', 'Failed to remove task', 'error');
+            showToast('错误', '删除任务失败', 'error');
         }
     };
-
-    // ============================================
-    // Task Registration (from Drawer)
-    // ============================================
-    async function registerNewTask() {
-        const taskIdInput = document.getElementById('newTaskId');
-        const taskDescInput = document.getElementById('newTaskDesc');
-        const taskTimeoutInput = document.getElementById('newTaskTimeout');
-
-        const taskId = taskIdInput?.value.trim();
-        const description = taskDescInput?.value.trim();
-        const timeout = parseInt(taskTimeoutInput?.value) || 20;
-
-        if (!taskId) {
-            showToast('Error', 'Task ID is required', 'error');
-            return;
-        }
-
-        try {
-            const response = await fetch('/task/register', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    task_id: taskId,
-                    description: description,
-                    timeout_minutes: timeout,
-                    total_steps: 0
-                })
-            });
-
-            if (response.ok) {
-                showToast('Task Registered', `Task "${taskId}" has been registered`, 'success');
-                // Clear form
-                if (taskIdInput) taskIdInput.value = '';
-                if (taskDescInput) taskDescInput.value = '';
-                if (taskTimeoutInput) taskTimeoutInput.value = '20';
-                // Refresh task list
-                await loadTasksForDrawer();
-            } else {
-                const errorData = await response.json();
-                showToast('Error', errorData.detail || 'Failed to register task', 'error');
-            }
-        } catch (error) {
-            console.error('Failed to register task:', error);
-            showToast('Error', 'Failed to register task', 'error');
-        }
-    }
 
     // ============================================
     // Patrol Task Configuration
@@ -3678,8 +3746,8 @@
         }
         return {
             enabled: false,
-            interval: 5,
-            message: 'Please check task progress and report status.'
+            interval: 120,
+            message: '请汇报当前子进程的进度与状态。'
         };
     }
 
@@ -3729,7 +3797,7 @@
 
         const history = loadPatrolHistory();
         if (history.length === 0) {
-            list.innerHTML = '<div class="drawer-empty-state" style="padding: 10px; font-size: 11px;">No history yet</div>';
+            list.innerHTML = '<div class="drawer-empty-state" style="padding: 10px; font-size: 11px;">暂无记录</div>';
             return;
         }
 
@@ -3744,7 +3812,7 @@
     function clearPatrolHistory() {
         savePatrolHistory([]);
         renderPatrolHistory();
-        showToast('History Cleared', 'Patrol history has been cleared', 'info', 2000);
+        showToast('历史已清空', '巡检历史记录已清空', 'info', 2000);
     }
 
     function initPatrolTask() {
@@ -3774,17 +3842,17 @@
             const newConfig = {
                 enabled: this.checked,
                 interval: parseInt(intervalInput?.value) || 5,
-                message: messageInput?.value || 'Please check task progress.'
+                message: messageInput?.value || '请汇报当前子进程的进度与状态。'
             };
             savePatrolConfig(newConfig);
             updatePatrolStatus(newConfig.enabled);
 
             if (newConfig.enabled) {
                 startPatrolTask(newConfig);
-                showToast('Patrol Task', 'Patrol task enabled', 'success', 2000);
+                showToast('巡检任务', '巡检任务已启用', 'success', 2000);
             } else {
                 stopPatrolTask();
-                showToast('Patrol Task', 'Patrol task disabled', 'info', 2000);
+                showToast('巡检任务', '巡检任务已停用', 'info', 2000);
             }
         });
 
@@ -3800,7 +3868,7 @@
 
         messageInput?.addEventListener('change', function() {
             const config = loadPatrolConfig();
-            config.message = this.value || 'Please check task progress.';
+            config.message = this.value || '请汇报当前子进程的进度与状态。';
             savePatrolConfig(config);
         });
     }
@@ -3808,7 +3876,7 @@
     function updatePatrolStatus(enabled) {
         const statusValue = document.getElementById('patrolStatusValue');
         if (statusValue) {
-            statusValue.textContent = enabled ? 'Active' : 'Disabled';
+            statusValue.textContent = enabled ? '已启用' : '已停用';
             statusValue.classList.toggle('active', enabled);
         }
     }
@@ -3856,14 +3924,20 @@
         }
     }
 
-    function _formatExpression(task) {
-        // Show human-readable schedule info
-        const expr = task.expression || '';
-        if (task.seconds_until_next != null) {
-            const mins = Math.round(task.seconds_until_next / 60);
-            return `${expr} (${mins}m)`;
-        }
-        return expr;
+    const _SCHEDULE_TYPE_LABELS = {
+        cron: '每日',
+        interval: '周期',
+        oneshot: '单次',
+    };
+
+    function _formatScheduleCountdown(seconds) {
+        if (seconds == null) return '';
+        if (seconds < 60) return `${seconds} 秒后`;
+        const mins = Math.round(seconds / 60);
+        if (mins < 60) return `${mins} 分后`;
+        const hours = Math.floor(mins / 60);
+        const remainMin = mins % 60;
+        return `${hours} 小时${remainMin > 0 ? ' ' + remainMin + ' 分' : ''}后`;
     }
 
     function renderScheduledTasks(tasks) {
@@ -3873,19 +3947,31 @@
         tasks = tasks || _scheduledTasksCache;
 
         if (tasks.length === 0) {
-            list.innerHTML = '<div class="drawer-empty-state">No scheduled tasks</div>';
+            list.innerHTML = '<div class="drawer-empty-state">暂无定时任务</div>';
             return;
         }
 
-        list.innerHTML = tasks.map(task => `
+        list.innerHTML = tasks.map(task => {
+            const typeLabel = _SCHEDULE_TYPE_LABELS[task.schedule_type] || task.schedule_type || '未知';
+            const expr = task.expression || '';
+            const countdown = task.seconds_until_next != null
+                ? _formatScheduleCountdown(task.seconds_until_next)
+                : '';
+            const preview = (task.message || '').substring(0, 40);
+            const hasEllipsis = (task.message || '').length > 40;
+
+            return `
             <div class="scheduled-task-item" data-id="${escapeHtml(task.id)}">
                 <div class="scheduled-task-info">
-                    <span class="scheduled-task-time">${escapeHtml(_formatExpression(task))}</span>
-                    <span class="scheduled-task-preview">${escapeHtml((task.message || '').substring(0, 40))}${(task.message || '').length > 40 ? '...' : ''}</span>
+                    <div class="scheduled-task-header-row">
+                        <span class="scheduled-task-expr">${escapeHtml(expr)}</span>
+                        ${countdown ? `<span class="scheduled-task-countdown">${escapeHtml(countdown)}</span>` : ''}
+                    </div>
+                    <span class="scheduled-task-preview">${escapeHtml(preview)}${hasEllipsis ? '…' : ''}</span>
                 </div>
-                <span class="scheduled-task-badge">${task.schedule_type || 'unknown'}</span>
+                <span class="scheduled-task-badge">${typeLabel}</span>
                 <div class="scheduled-task-actions">
-                    <button class="scheduled-task-action-btn delete" onclick="window.deleteScheduledTask('${escapeHtml(task.id)}')" title="Delete">
+                    <button class="scheduled-task-action-btn delete" onclick="window.deleteScheduledTask('${escapeHtml(task.id)}')" title="删除">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <line x1="18" y1="6" x2="6" y2="18"></line>
                             <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -3893,17 +3979,17 @@
                     </button>
                 </div>
             </div>
-        `).join('');
+        `;}).join('');
     }
 
     window.deleteScheduledTask = async function(scheduleId) {
         try {
             await fetch(`/api/scheduled-tasks/${encodeURIComponent(scheduleId)}`, { method: 'DELETE' });
-            showToast('Deleted', 'Scheduled task removed', 'info', 2000);
+            showToast('已删除', '定时任务已删除', 'info', 2000);
             const tasks = await fetchScheduledTasks();
             renderScheduledTasks(tasks);
         } catch (e) {
-            showToast('Error', 'Failed to delete task', 'error');
+            showToast('错误', '删除定时任务失败', 'error');
         }
     };
 
@@ -3925,7 +4011,7 @@
 
         addBtn?.addEventListener('click', () => {
             const modalTitle = modal?.querySelector('.modal-header h3');
-            if (modalTitle) modalTitle.textContent = 'Add Scheduled Task';
+            if (modalTitle) modalTitle.textContent = '添加定时任务';
             modal?.classList.add('active');
             document.getElementById('scheduledTaskTime').value = '';
             document.getElementById('scheduledTaskMessage').value = '';
@@ -3949,11 +4035,11 @@
         const repeat = repeatInput?.checked || false;
 
         if (!time) {
-            showToast('Error', 'Please select a time', 'error');
+            showToast('错误', '请选择执行时间', 'error');
             return;
         }
         if (!message) {
-            showToast('Error', 'Please enter a message', 'error');
+            showToast('错误', '请输入发送内容', 'error');
             return;
         }
 
@@ -3987,15 +4073,15 @@
             });
             if (!resp.ok) {
                 const err = await resp.json();
-                showToast('Error', err.detail || 'Failed to create task', 'error');
+                showToast('错误', err.detail || '创建定时任务失败', 'error');
                 return;
             }
-            showToast('Scheduled Task', `Task scheduled for ${time}`, 'success', 2000);
+            showToast('定时任务', `已设定 ${time} 执行`, 'success', 2000);
             const tasks = await fetchScheduledTasks();
             renderScheduledTasks(tasks);
             document.getElementById('scheduledTaskModal')?.classList.remove('active');
         } catch (e) {
-            showToast('Error', 'Failed to create task', 'error');
+            showToast('错误', '创建定时任务失败', 'error');
         }
     }
 
@@ -4015,9 +4101,6 @@
                 }, 500);
             });
         });
-
-        // Register task button
-        document.getElementById('registerTaskBtn')?.addEventListener('click', registerNewTask);
 
         // Initialize task filters
         initTaskFilters();
@@ -4133,6 +4216,9 @@
         // Initialize theme
         initTheme();
 
+        // 绑定滚动监听（回到底部按钮 + 顶部分页）— 保底绑一次，不依赖有无历史
+        _ensureHistoryScrollBound();
+
         // Initialize i18n if available
         if (window.i18n) {
             window.i18n.initLanguage();
@@ -4216,9 +4302,6 @@
         // Focus input
         elements.messageInput.focus();
 
-        // Load bookmarks
-        loadBookmarks();
-
         // Search event listeners
         searchToggleBtn?.addEventListener('click', toggleSearch);
         searchCloseBtn?.addEventListener('click', closeSearch);
@@ -4239,12 +4322,6 @@
         searchPrevBtn?.addEventListener('click', searchPrev);
         searchNextBtn?.addEventListener('click', searchNext);
 
-        // Bookmarks event listeners
-        bookmarksToggleBtn?.addEventListener('click', toggleBookmarksPanel);
-        closeBookmarksBtn?.addEventListener('click', closeBookmarksPanel);
-        clearBookmarksBtn?.addEventListener('click', clearAllBookmarks);
-        bookmarksPanel?.querySelector('.bookmarks-backdrop')?.addEventListener('click', closeBookmarksPanel);
-
         // Export event listener
         exportBtn?.addEventListener('click', exportToMarkdown);
 
@@ -4254,13 +4331,16 @@
         initMcpPanel();
         initPermissionToggle();
 
-        // Observe for new messages to enhance code blocks (debounced to avoid perf issues during streaming)
+        // Observe for new messages to enhance code blocks + images (debounced to avoid perf issues during streaming)
         let _enhanceDebounceTimer = null;
         const observer = new MutationObserver(() => {
             if (_enhanceDebounceTimer) clearTimeout(_enhanceDebounceTimer);
-            _enhanceDebounceTimer = setTimeout(() => enhanceCodeBlocks(), 500);
+            _enhanceDebounceTimer = setTimeout(() => {
+                enhanceCodeBlocks();
+                enhanceImages();
+            }, 500);
         });
-        observer.observe(elements.messagesWrapper, { childList: true });
+        observer.observe(elements.messagesWrapper, { childList: true, subtree: true });
 
         console.log('Claude Agent Chat initialized');
     }

@@ -1,5 +1,6 @@
 """Claude Session 管理 API — 基于 SDK 接口"""
 
+import json
 import re
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -14,7 +15,7 @@ from claude_agent_sdk import (
     fork_session,
     delete_session as sdk_delete_session,
 )
-from server.config import _get_instance_cwd, PROJECT_ROOT
+from server.config import _get_instance_cwd, PROJECT_ROOT, get_claude_sessions_dir
 
 router = APIRouter()
 
@@ -263,3 +264,111 @@ async def delete_claude_session(session_id: str):
         _agent_manager._save_instance_sessions()
 
     return {"status": "deleted", "session_id": session_id}
+
+
+# ==================================================================
+# Fork from a specific message (for edit-resend / retry)
+# ==================================================================
+
+class ForkFromMessageRequest(BaseModel):
+    before_message_id: str      # 在这条消息"之前"分叉（即新 session 不包含这条消息）
+    delete_source: bool = False  # 是否删除原 session（edit/retry 通常 True）
+    instance_id: Optional[str] = None
+
+
+def _find_parent_uuid(session_id: str, message_uuid: str) -> tuple[Optional[str], bool]:
+    """读 session jsonl，找到 message_uuid 这条消息的 parentUuid。
+
+    Returns: (parent_uuid, found)
+        - found=False: 消息未找到
+        - found=True, parent_uuid=None: 消息存在但是第一条（无 parent）
+        - found=True, parent_uuid=<uuid>: 正常 parent
+    """
+    jsonl_path = get_claude_sessions_dir() / f"{session_id}.jsonl"
+    if not jsonl_path.exists():
+        return None, False
+
+    with open(jsonl_path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if obj.get("uuid") == message_uuid:
+                return obj.get("parentUuid"), True
+    return None, False
+
+
+@router.post("/api/claude-sessions/{session_id}/fork-from-message")
+async def fork_from_message_api(session_id: str, req: ForkFromMessageRequest):
+    """从指定消息处分叉出新 session（支持"编辑重发"和"重试"）。
+
+    流程：
+    1. 读 session jsonl 找到 before_message_id 的 parentUuid
+    2. SDK fork_session(up_to_message_id=parentUuid) 创建新 session，只保留到 parent 为止
+    3. 可选删除原 session
+    4. 更新实例绑定到新 session（前端后续 sendMessage 会进新 session）
+    """
+    parent_uuid, found = _find_parent_uuid(session_id, req.before_message_id)
+    if not found:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Message {req.before_message_id} not found in session {session_id}",
+        )
+    if not parent_uuid:
+        raise HTTPException(
+            status_code=400,
+            detail="This is the first message in the session; nothing to fork from. Create a new session instead.",
+        )
+
+    # Fork — SDK up_to_message_id 是 inclusive，传 parentUuid 就能切到"在当前消息之前"
+    try:
+        result = fork_session(
+            session_id,
+            directory=_get_directory(),
+            up_to_message_id=parent_uuid,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Fork failed: {e}")
+
+    new_session_id = result.session_id
+
+    # 更新实例的 session 绑定（持久化 + 延迟切换）
+    target_instance = _resolve_instance_id(req.instance_id)
+    if _agent_manager:
+        _agent_manager.update_instance_config(target_instance, "last_session_id", new_session_id)
+        _agent_manager._save_instance_sessions()
+    instance = _agent_manager.get_instance(target_instance) if _agent_manager else None
+    if instance:
+        instance.schedule_session_switch(new_session_id)
+
+    # 广播给前端（同步多设备）
+    if _ws_channel:
+        await _ws_channel.send_response(
+            {"type": "session_changed", "session_id": new_session_id, "title": f"Fork from {session_id[:8]}"},
+            {"instance_id": target_instance},
+        )
+
+    # 可选删除原 session
+    source_deleted = False
+    if req.delete_source:
+        try:
+            sdk_delete_session(session_id, directory=_get_directory())
+            source_deleted = True
+            # 清理实例 config 里残留的 last_session_id 引用
+            if _agent_manager:
+                for iid, cfg in _agent_manager.get_all_instance_configs().items():
+                    if cfg.get("last_session_id") == session_id:
+                        _agent_manager.update_instance_config(iid, "last_session_id", new_session_id)
+            print(f"[fork-from-message] Deleted source session {session_id[:8]}..., new={new_session_id[:8]}...")
+        except Exception as e:
+            # 即使删失败也不中断（新 session 已就绪）
+            print(f"[fork-from-message] Failed to delete source session: {e}")
+
+    return {
+        "status": "ok",
+        "new_session_id": new_session_id,
+        "source_session_id": session_id,
+        "source_deleted": source_deleted,
+        "parent_uuid": parent_uuid,
+    }

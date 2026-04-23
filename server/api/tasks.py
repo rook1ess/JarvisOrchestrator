@@ -36,7 +36,8 @@ async def register_task(data: TaskRegisterData):
 async def list_tasks():
     loop = asyncio.get_running_loop()
     tasks = await loop.run_in_executor(None, lambda: _task_manager.get_all_tasks(check_tmux=True))
-    return {"tasks": tasks}
+    recent_history = _task_manager.history[-4:] if _task_manager.history else []
+    return {"tasks": tasks + recent_history}
 
 
 @router.put("/task/{task_id}/progress")

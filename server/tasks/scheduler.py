@@ -218,7 +218,7 @@ class ScheduledTaskManager:
         print(f"[Scheduler] 调度器已启动 ({len(self._tasks)} 个任务)")
 
     async def stop(self):
-        """停止调度循环并清空所有定时任务（任务与会话上下文绑定，重启后无意义）"""
+        """停止调度循环，保留已注册的定时任务（持久化至 scheduled_tasks.json，重启后恢复）"""
         self._running = False
         if self._poll_task:
             self._poll_task.cancel()
@@ -226,7 +226,4 @@ class ScheduledTaskManager:
                 await self._poll_task
             except asyncio.CancelledError:
                 pass
-        count = len(self._tasks)
-        self._tasks.clear()
-        self._save()
-        print(f"[Scheduler] 调度器已停止，已清空 {count} 个定时任务")
+        print(f"[Scheduler] 调度器已停止，保留 {len(self._tasks)} 个定时任务")

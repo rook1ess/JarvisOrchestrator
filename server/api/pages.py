@@ -13,6 +13,8 @@ _ALLOWED_ROOTS = [
     Path.home() / "Downloads",
     Path.home() / "Desktop",
     Path.home() / "Projects",
+    Path.home() / ".agent-browser",  # c-browser skill 默认截图路径
+    Path.home() / ".screenpipe" / "data",  # screenpipe 截图和音视频资源
     Path("/tmp"),
 ]
 

@@ -111,34 +111,14 @@
                             <div id="modelList"></div>
                         </div>
                     </div>
-                    <!-- MCP Status -->
-                    <div class="context-indicator-wrapper">
-                        <button class="header-pill-btn" id="mcpBtn" title="MCP Servers">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <circle cx="12" cy="12" r="3"/>
-                                <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
-                            </svg>
-                            <span>MCP</span>
-                        </button>
-                        <div class="context-popover" id="mcpPopover">
-                            <div class="context-popover-title">MCP Servers</div>
-                            <div id="mcpServerList" style="padding:4px 0;color:var(--text-muted)">Click to load</div>
-                        </div>
-                    </div>
-                    <!-- Permission Mode Toggle -->
-                    <div class="context-indicator-wrapper">
-                        <button class="header-pill-btn" id="permissionBtn" title="Permission: Bypass">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-                            </svg>
-                            <span id="permissionLabel">Bypass</span>
-                        </button>
-                        <div class="context-popover" id="permissionPopover">
-                            <div class="context-popover-title">Permission Mode</div>
-                            <div id="permissionModeList"></div>
-                        </div>
-                    </div>
+                    <!-- Settings -->
+                    <button class="header-pill-btn" id="settingsBtn" title="系统设置">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="3"/>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                        </svg>
+                        <span>设置</span>
+                    </button>
                 </div>
                 <div class="role-indicator" id="roleIndicator">
                     <span class="role-status" id="roleStatus">
@@ -154,7 +134,7 @@
             <div class="task-bar" id="taskBar">
                 <div class="task-bar-header">
                     <div class="task-bar-label">Active Tasks</div>
-                    <button class="task-refresh-btn" id="taskRefreshBtn" title="Refresh tasks">
+                    <button class="task-refresh-btn" id="taskRefreshBtn" title="刷新任务">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <polyline points="23 4 23 10 17 10"/>
                             <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
@@ -212,11 +192,24 @@
                 </div>
             </div>
 
+            <!-- Scroll to Bottom Button (悬浮于输入框上方) -->
+            <button class="scroll-to-bottom-btn" id="scrollToBottomBtn" title="回到底部" aria-label="回到底部">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <polyline points="19 12 12 19 5 12"></polyline>
+                </svg>
+            </button>
+
             <!-- Input Area -->
             <div class="input-area">
+                <div class="ai-status-strip" id="aiStatusStrip" aria-live="polite">
+                    <span class="status-pulse"></span>
+                    <span class="status-text" id="aiStatusText">Working</span>
+                    <span class="status-dots"><span></span><span></span><span></span></span>
+                </div>
                 <div class="input-container">
                     <div class="attachment-preview" id="attachmentPreview"></div>
-                    <textarea id="messageInput" placeholder="Type your message..." rows="1" autofocus></textarea>
+                    <textarea id="messageInput" placeholder="今天想做点什么呢？" rows="1" autofocus></textarea>
                     <button class="attach-btn" id="attachBtn" title="Attach file">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
@@ -235,37 +228,10 @@
                     </button>
                 </div>
                 <div class="input-footer">
-                    <span class="input-hint">Press Enter to send, Shift+Enter for new line</span>
+                    <span class="input-hint">回车发送 · Shift + 回车换行</span>
                 </div>
             </div>
         </main>
-    </div>
-
-    <!-- Bookmarks Panel -->
-    <div class="bookmarks-panel" id="bookmarksPanel">
-        <div class="bookmarks-backdrop"></div>
-        <div class="bookmarks-content">
-            <div class="bookmarks-header">
-                <h3>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-                    </svg>
-                    Bookmarked Messages
-                </h3>
-                <button type="button" class="bookmarks-close" id="closeBookmarksBtn">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="18" y1="6" x2="6" y2="18"/>
-                        <line x1="6" y1="6" x2="18" y2="18"/>
-                    </svg>
-                </button>
-            </div>
-            <div class="bookmarks-body" id="bookmarksList">
-                <!-- Dynamically populated -->
-            </div>
-            <div class="bookmarks-footer">
-                <button class="btn btn-secondary" id="clearBookmarksBtn">Clear All</button>
-            </div>
-        </div>
     </div>
 
     <!-- Keyboard Shortcuts Panel -->
@@ -301,10 +267,6 @@
                     <div class="shortcut-row">
                         <span class="shortcut-desc">Search messages</span>
                         <span class="shortcut-keys"><kbd class="kbd">Ctrl</kbd><span class="kbd-plus">+</span><kbd class="kbd">F</kbd></span>
-                    </div>
-                    <div class="shortcut-row">
-                        <span class="shortcut-desc">View bookmarks</span>
-                        <span class="shortcut-keys"><kbd class="kbd">Ctrl</kbd><span class="kbd-plus">+</span><kbd class="kbd">B</kbd></span>
                     </div>
                     <div class="shortcut-row">
                         <span class="shortcut-desc">Export chat</span>
@@ -361,7 +323,7 @@
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
                     </svg>
-                    Task Status
+                    任务状态
                 </h3>
                 <button type="button" class="status-drawer-close" id="closeStatusDrawerBtn">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -374,8 +336,8 @@
                 <!-- Task List Section -->
                 <div class="drawer-section">
                     <div class="drawer-section-header">
-                        <span class="drawer-section-title">Tasks</span>
-                        <button class="drawer-action-btn" id="refreshTasksBtn" title="Refresh tasks (R)">
+                        <span class="drawer-section-title">任务</span>
+                        <button class="drawer-action-btn" id="refreshTasksBtn" title="刷新任务 (R)">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <polyline points="23 4 23 10 17 10"/>
                                 <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
@@ -384,102 +346,34 @@
                     </div>
                     <!-- Task Filter Tabs -->
                     <div class="task-filter-tabs" id="taskFilterTabs">
-                        <button class="task-filter-tab active" data-filter="all">
-                            All <span class="task-filter-count" id="filterCountAll">0</span>
-                        </button>
-                        <button class="task-filter-tab" data-filter="running">
-                            Running <span class="task-filter-count" id="filterCountRunning">0</span>
+                        <button class="task-filter-tab active" data-filter="running">
+                            进行中 <span class="task-filter-count" id="filterCountRunning">0</span>
                         </button>
                         <button class="task-filter-tab" data-filter="done">
-                            Done <span class="task-filter-count" id="filterCountDone">0</span>
+                            已完成 <span class="task-filter-count" id="filterCountDone">0</span>
                         </button>
                         <button class="task-filter-tab" data-filter="blocked">
-                            Blocked <span class="task-filter-count" id="filterCountBlocked">0</span>
+                            阻塞 <span class="task-filter-count" id="filterCountBlocked">0</span>
+                        </button>
+                        <button class="task-filter-tab" data-filter="all">
+                            全部 <span class="task-filter-count" id="filterCountAll">0</span>
                         </button>
                     </div>
                     <div class="drawer-task-list" id="drawerTaskList">
-                        <div class="drawer-empty-state">No tasks</div>
-                    </div>
-                </div>
-
-                <!-- Add Task Section -->
-                <div class="drawer-section">
-                    <div class="drawer-section-header">
-                        <span class="drawer-section-title">Register Task</span>
-                        <button class="drawer-action-btn drawer-collapse-btn" data-target="addTaskForm">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <polyline points="6 9 12 15 18 9"/>
-                            </svg>
-                        </button>
-                    </div>
-                    <div class="drawer-form" id="addTaskForm">
-                        <div class="form-group">
-                            <label for="newTaskId">Task ID</label>
-                            <input type="text" id="newTaskId" class="form-input" placeholder="e.g., frontend_v2">
-                        </div>
-                        <div class="form-group">
-                            <label for="newTaskDesc">Description</label>
-                            <input type="text" id="newTaskDesc" class="form-input" placeholder="Task description">
-                        </div>
-                        <div class="form-group">
-                            <label for="newTaskTimeout">Timeout (minutes)</label>
-                            <input type="number" id="newTaskTimeout" class="form-input" value="20" min="1" max="1440">
-                        </div>
-                        <button class="btn btn-primary btn-block" id="registerTaskBtn">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <line x1="12" y1="5" x2="12" y2="19"/>
-                                <line x1="5" y1="12" x2="19" y2="12"/>
-                            </svg>
-                            Register Task
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Patrol Task Section -->
-                <div class="drawer-section">
-                    <div class="drawer-section-header">
-                        <span class="drawer-section-title">Patrol Task</span>
-                        <label class="toggle-switch">
-                            <input type="checkbox" id="patrolEnabled">
-                            <span class="toggle-slider"></span>
-                        </label>
-                    </div>
-                    <div class="drawer-form" id="patrolTaskForm">
-                        <div class="form-group">
-                            <label for="patrolInterval">Interval (minutes)</label>
-                            <input type="number" id="patrolInterval" class="form-input" value="5" min="1" max="60">
-                        </div>
-                        <div class="form-group">
-                            <label for="patrolMessage">Message to send</label>
-                            <textarea id="patrolMessage" class="form-input form-textarea" rows="2" placeholder="Check task progress"></textarea>
-                        </div>
-                        <div class="patrol-status" id="patrolStatus">
-                            <span class="patrol-status-label">Status:</span>
-                            <span class="patrol-status-value" id="patrolStatusValue">Disabled</span>
-                        </div>
-                        <!-- Patrol History -->
-                        <div class="patrol-history" id="patrolHistory">
-                            <div class="patrol-history-header">
-                                <span class="patrol-history-title">Recent History</span>
-                                <button class="patrol-history-clear" id="clearPatrolHistoryBtn">Clear</button>
-                            </div>
-                            <div class="patrol-history-list" id="patrolHistoryList">
-                                <div class="drawer-empty-state" style="padding: 10px; font-size: 11px;">No history yet</div>
-                            </div>
-                        </div>
+                        <div class="drawer-empty-state">暂无任务</div>
                     </div>
                 </div>
 
                 <!-- Scheduled Task Section -->
                 <div class="drawer-section">
                     <div class="drawer-section-header">
-                        <span class="drawer-section-title">Scheduled Tasks</span>
+                        <span class="drawer-section-title">定时任务</span>
                         <div class="drawer-header-actions">
                             <label class="toggle-switch">
                                 <input type="checkbox" id="scheduledTasksEnabled">
                                 <span class="toggle-slider"></span>
                             </label>
-                            <button class="drawer-action-btn" id="addScheduledTaskBtn" title="Add scheduled task">
+                            <button class="drawer-action-btn" id="addScheduledTaskBtn" title="添加定时任务">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                     <line x1="12" y1="5" x2="12" y2="19"/>
                                     <line x1="5" y1="12" x2="19" y2="12"/>
@@ -488,7 +382,42 @@
                         </div>
                     </div>
                     <div class="scheduled-task-list" id="scheduledTaskList">
-                        <div class="drawer-empty-state">No scheduled tasks</div>
+                        <div class="drawer-empty-state">暂无定时任务</div>
+                    </div>
+                </div>
+
+                <!-- Patrol Task Section (保底机制，下移至末尾) -->
+                <div class="drawer-section">
+                    <div class="drawer-section-header">
+                        <span class="drawer-section-title">巡检任务</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="patrolEnabled">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="drawer-form" id="patrolTaskForm">
+                        <div class="form-group">
+                            <label for="patrolInterval">间隔（分钟）</label>
+                            <input type="number" id="patrolInterval" class="form-input" value="120" min="1">
+                        </div>
+                        <div class="form-group">
+                            <label for="patrolMessage">发送内容</label>
+                            <textarea id="patrolMessage" class="form-input form-textarea" rows="2" placeholder="请汇报当前子进程进度"></textarea>
+                        </div>
+                        <div class="patrol-status" id="patrolStatus">
+                            <span class="patrol-status-label">状态：</span>
+                            <span class="patrol-status-value" id="patrolStatusValue">已停用</span>
+                        </div>
+                        <!-- Patrol History -->
+                        <div class="patrol-history" id="patrolHistory">
+                            <div class="patrol-history-header">
+                                <span class="patrol-history-title">近期记录</span>
+                                <button class="patrol-history-clear" id="clearPatrolHistoryBtn">清空</button>
+                            </div>
+                            <div class="patrol-history-list" id="patrolHistoryList">
+                                <div class="drawer-empty-state" style="padding: 10px; font-size: 11px;">暂无记录</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -500,7 +429,7 @@
         <div class="modal-backdrop"></div>
         <div class="modal-content">
             <div class="modal-header">
-                <h3>Add Scheduled Task</h3>
+                <h3>添加定时任务</h3>
                 <button type="button" class="modal-close" id="closeScheduledTaskModalBtn">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -510,29 +439,70 @@
             </div>
             <div class="modal-body">
                 <div class="form-group">
-                    <label for="scheduledTaskTime">Execute Time</label>
+                    <label for="scheduledTaskTime">执行时间</label>
                     <input type="time" id="scheduledTaskTime" class="form-input">
                 </div>
                 <div class="form-group">
-                    <label for="scheduledTaskMessage">Message to send</label>
-                    <textarea id="scheduledTaskMessage" class="form-input form-textarea" rows="3" placeholder="Message content"></textarea>
+                    <label for="scheduledTaskMessage">发送内容</label>
+                    <textarea id="scheduledTaskMessage" class="form-input form-textarea" rows="3" placeholder="要发送给小克的消息"></textarea>
                 </div>
                 <div class="form-group">
                     <label class="checkbox-label">
                         <input type="checkbox" id="scheduledTaskRepeat">
-                        <span>Repeat daily</span>
+                        <span>每日重复</span>
                     </label>
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" id="cancelScheduledTaskBtn">Cancel</button>
-                <button type="button" class="btn btn-primary" id="saveScheduledTaskBtn">Save</button>
+                <button type="button" class="btn btn-secondary" id="cancelScheduledTaskBtn">取消</button>
+                <button type="button" class="btn btn-primary" id="saveScheduledTaskBtn">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Drawer -->
+    <div class="settings-drawer" id="settingsDrawer">
+        <div class="settings-drawer-backdrop" id="settingsDrawerBackdrop"></div>
+        <div class="settings-drawer-content">
+            <div class="settings-drawer-header">
+                <h3>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                    </svg>
+                    系统设置
+                </h3>
+                <button type="button" class="settings-drawer-close" id="closeSettingsDrawerBtn">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="settings-tabs" id="settingsTabs">
+                <button class="settings-tab active" data-tab="dialog">对话</button>
+                <button class="settings-tab" data-tab="memory">记忆</button>
+                <button class="settings-tab" data-tab="knowledge">向量</button>
+                <button class="settings-tab" data-tab="schedule">定时</button>
+                <button class="settings-tab" data-tab="channel">频道</button>
+                <button class="settings-tab" data-tab="service">服务</button>
+            </div>
+            <div class="settings-drawer-body" id="settingsDrawerBody">
+                <div class="settings-loading">加载中…</div>
+            </div>
+            <div class="settings-drawer-footer">
+                <div class="settings-footer-hint" id="settingsFooterHint"></div>
+                <div class="settings-footer-buttons">
+                    <button type="button" class="btn btn-secondary" id="settingsCancelBtn">取消</button>
+                    <button type="button" class="btn btn-primary" id="settingsSaveBtn">保存</button>
+                    <button type="button" class="btn btn-primary" id="settingsSaveRestartBtn" title="保存后重启后端服务">保存并重启</button>
+                </div>
             </div>
         </div>
     </div>
 
     <!-- Status Drawer Toggle Button (Fixed on right side) -->
-    <button class="status-drawer-toggle" id="statusDrawerToggle" title="Task Status (T)">
+    <button class="status-drawer-toggle" id="statusDrawerToggle" title="任务状态 (T)">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
         </svg>
@@ -545,6 +515,7 @@
     <!-- i18n Module -->
     <script src="/static/i18n.js"></script>
     <script src="/static/app.js"></script>
+    <script src="/static/settings.js"></script>
 </body>
 
 </html>

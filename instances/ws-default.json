@@ -1,11 +1,23 @@
 {
-  "model": "opus[1m]",
+  "model": "claude-opus-4-7[1m]",
   "permission_mode": "bypassPermissions",
   "mcp_enabled": true,
   "mcp_servers_disabled": [
     "xiaohongshu-mcp",
     "media-crawler-mcp",
     "feishu-mcp"
+  ],
+  "disallowed_tools": [
+    "mcp__jarvis__browser_navigate",
+    "mcp__jarvis__browser_snapshot",
+    "mcp__jarvis__browser_screenshot",
+    "mcp__jarvis__browser_click",
+    "mcp__jarvis__browser_fill",
+    "mcp__jarvis__browser_select",
+    "mcp__jarvis__browser_evaluate",
+    "mcp__jarvis__browser_wait",
+    "mcp__jarvis__browser_get_content",
+    "mcp__jarvis__browser_close"
   ],
   "allowed_tools": [
     "Read",
