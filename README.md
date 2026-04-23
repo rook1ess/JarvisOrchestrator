@@ -32,6 +32,10 @@
 
 ## 截图
 
+![Jarvis - 日常主力助手（AI 日报汇总）](docs/screenshot-ai-daily.jpeg)
+
+![Jarvis - 运行时设置面板（权限与 MCP 热切换）](docs/screenshot-settings.jpeg)
+
 ![Jarvis Orchestrator - 三路并发任务](docs/screenshot.png)
 
 ![Jarvis Orchestrator - 验收报告](docs/screenshot-2.png)
